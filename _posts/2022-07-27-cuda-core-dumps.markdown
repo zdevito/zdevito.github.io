@@ -20,14 +20,14 @@ This post goes over how to generate an extract information from these core dumps
 Generate the core dump
 =====================
 
-Set `CUDA_ENABLE_COREDUMP_ON_EXCEPTION=1` on the process that has the fault. When the fault occurs it will produce a core dump file `cudacoredump.4922.od.fbinfra.net.835752.1658811339`.
+Set `CUDA_ENABLE_COREDUMP_ON_EXCEPTION=1` on the process that has the fault. When the fault occurs it will produce a core dump file `cudacoredump.hostname.pid`.
 
 Use cuda-gdb to open the core dump
 ==================================
 
     $ /usr/local/cuda/bin/cuda-gdb
-    (cuda-gdb) target cudacore /tmp/cudacoredump.835752.1658811339
-    Opening GPU coredump: /tmp/cudacoredump.835752.1658811339
+    (cuda-gdb) target cudacore /tmp/cudacoredump.hostname.pid
+    Opening GPU coredump: /tmp/cudacoredump.hostname.pid
 
 It should report some information about where the fault happened:
 
