@@ -8,13 +8,13 @@ categories: ""
 A guide to PyTorch's CUDA Caching Allocator
 ===========================================
 
-The goal of the CUDA caching allocator in PyTorch is to reach a steady state where the program runs without needing to request new memory from CUDA using `cudaMalloc` and `cudaFree`. PyTorch relies on being able to have the CPU execution run ahead of GPU execution to hide the latency of running Python behind the costly CUDA operators, but these APIs, especially cudaFree, introduce synchronization.
+The goal of the CUDA caching allocator in PyTorch is to reach a steady state where the program runs without needing to request new memory from CUDA using `cudaMalloc` and `cudaFree`. PyTorch relies on the CPU execution running ahead of GPU execution to hide the latency of the Python interpreter behind the more expensive CUDA operation. But these memory APIs, especially cudaFree, introduce synchronization which interfere with this process.
 
 To accomplish its goal, the caching allocator requests blocks of memory from CUDA and figures out ways to split up and reuse these blocks without returning them to CUDA.
 
-Why not just request all GPU memory and manage it inside PyTorch? PyTorch is not the only library to use the CUDA APIs. Many programs will use cuBlas, cuDNN, and NCCL all of which do some allocations on their own, and users might mix PyTorch with other CUDA-accelerated libraries we do not know about. Instead, if PyTorch ever uses N bytes of memory at one point, we will continue to to keep that much memory cached until a user specifically frees it via `empty_cache`.
+Why not just request all GPU memory and manage it inside PyTorch? PyTorch is not the only library to use the CUDA APIs. Many programs will use cuBlas, cuDNN, and NCCL all of which do some allocations on their own, and users might mix PyTorch with other CUDA-accelerated libraries we do not know about. Instead, if PyTorch ever uses N bytes of memory at one point, we will continue to to keep that much memory cached until a user specifically frees it via `torch.cuda.memory.empty_cache()`.
 
-Under normal circumstances, the allocator achieves these goals and mostly lives in the background. But sometimes a particular set of adversarial allocations might prevent it from reaching a steady state. Or maybe a program runs out of memory for good reasons and but it is hard read the statistics. In these cases, it is helpful to understand more about what the allocator is doing to debug the issue.
+Under normal circumstances, the allocator achieves these goals and mostly lives in the background. But sometimes a particular set of adversarial allocations might prevent it from reaching a steady state. Or maybe a program runs out of memory for good reasons but it is hard read the statistics. In these cases, it is helpful to understand more about what the allocator is doing to debug the issue.
 
 This document gives an overview with pseudocode for how the allocator behaves as of August 2022.
 
@@ -26,6 +26,8 @@ The overall approach to allocating memory is pretty simple. We maintain a cache 
     struct Block {
         void* addr;
         size_t size;
+        bool active;
+        set<Block>* pool;
         // for splitting and merging blocks.
         Block* prev, next;
     };
@@ -33,13 +35,13 @@ The overall approach to allocating memory is pretty simple. We maintain a cache 
     set<Block> small_pool;
     set<Block> large_pool;
 
-For < 1MB "small" tensors, we use a separate pool to avoid fragmentation the larger pool.
+For < 1MB "small" tensors, we use a separate pool to avoid fragmenting the larger pool.
 At a high level, we try to find a free block from this pool, but ask CUDA for more memory otherwise:
 
     Block malloc(int device, size_t size, cudaStream_t stream) {
 
-        process_cross_stream_delayed_free() // [Streams]
-        size = round_size(size); // [Allocation Sizes]
+        process_cross_stream_delayed_free()
+        size = round_size(size); 
         pool = size < 1MB ? small_pool : large_pool;
 
         Block block = <find and remove the smallest block in the pool on the same stream that is big enough to fit size>
@@ -51,11 +53,11 @@ At a high level, we try to find a free block from this pool, but ask CUDA for mo
         return block;
     }
 
-The allocation starts with some cleanup ([Streams](#streams-and-freeing-memory)) and  [allocation rounding](#allocation-rounding) of the size to be allocated. It then uses a best fit strategy finding the smallest block that fits for the allocation. If none is already in the cache, the we are not yet in a good steady state and ask CUDA for more memory.
+The allocation starts with some cleanup ([Streams](#streams-and-freeing-memory)) and  [allocation rounding](#allocation-rounding) of the size to be allocated. It then uses a best fit strategy finding the smallest block that fits for the allocation. If none is already in the cache, then we are not yet in a good steady state and ask CUDA for more memory.
 
 Finally, the block of allocated memory we choose may be significantly larger than what was requested. This can happen if we are reusing a previous bigger allocation for a smaller one, or because we always allocate 2MB for the small pool and 20MB for the large pool to avoid calling cudaMalloc too frequently. In these cases, `maybe_split_block` can split the block so the rest can be used for other allocations.
 
-Notice that blocks are allocated _per CUDA stream_. Each CUDA stream will have its own cache of allocations, with rebalancing done only by emptying all the caches in low-memory conditions.
+Blocks are allocated _per CUDA stream_. Each CUDA stream will have its own cache of allocations, with rebalancing done only by emptying all the caches in low-memory conditions.
 
 Allocation Rounding
 -------------------
@@ -78,11 +80,10 @@ The environment variable `CUDA_PYTORCH_CUDA_ALLOC_CONF=roundup_power2_divisions:
 
 
 
-
 Asking CUDA For More Memory
 ---------------------------
 
-A second set of rounding rules applying when we need more memory from CUDA. In this circumstance, we only ask CUDA for a multiple of its page size (2MB?) at the smallest, expecting to split the block up for smaller allocations. For large sizes this round happens in 20MB chunks:
+A second set of rounding rules applying when we need more memory from CUDA. In this circumstance, we only ask CUDA for a multiple of its page size (2MB?) at the smallest, expecting to split the block up for smaller allocations. For large sizes this rounding happens in 20MB chunks:
 
     Block alloc_new_block(size_t size) {
         // when we allocate a new block, we allocate it bigger than the requested object
@@ -146,8 +147,7 @@ Streams and freeing memory
 
 Events on a GPU are run in the order they are issued to a CUDA stream. Because we want the CPU to run ahead of the GPU, we also treat memory allocation and memory freeing as an event that happens in order on a stream. This lets us re-use an allocation on the same stream it was just freed on, even if we do not wait for the kernel using that allocation to completely finish before scheduling a kernel that will use the new allocation. This works because we know the GPU must finish the kernel with the last use of the old allocation before starting the kernel that uses the new one.
 
-There are no such ordering guarantees between streams, so extra care has to happen when a tensor `A` is allocated on one stream `creator` but used on another stream `user`. In these cases, users have to call `A.record_stream(user)` to let the allocator know about `A`'s use on `user`. During `free`, the allocator will only consider the block ready for reuse when all work that has been scheduled up to the point `A` became free on `user` is complete. This is done by issuing cross-stream synchronization, so it does not block the CPU:
-
+There are no such ordering guarantees between streams, so extra care has to happen when a tensor `A` is allocated on one stream `creator` but used on another stream `user`. In these cases, users have to call `A.record_stream(user)` to let the allocator know about `A`'s use on `user`. During `free`, the allocator will only consider the block ready for reuse when all work that has been scheduled up to the point `A` became free on `user` is complete. This is done by recording an event on the `user` stream and only handing out `A`'s member after that event has elapsed from the perspective of the CPU:
 
     void free(Block* block) {
         if (<block A has been used on a stream 'user' that it was not 'created' on>) {
@@ -182,14 +182,14 @@ The final piece of the allocator is how to recover during an OOM. This is referr
 Since `cudaFree` synchronizes the device, this process is very expensive, so we use this time to also free any of the cross stream blocks we were waiting for as well.
 
 
-At this point if we are out of memory, we report an OOM exception (the OOM statistic). Under some circumstance, it might be the case that there is enough memory in the system to continue but we cannot free it. For instance, if there is a small tensor allocated in a big block of memory, we cannot free that block, wasting the rest of the block.
+At this point if we are out of memory, we raise an `OutOfMemoryError` exception (the OOM statistic). Under some circumstance, it might be the case that there is enough memory in the system to continue but we cannot free it. For instance, if there is a small tensor allocated in a big block of memory, we cannot free that block, wasting the rest of the block.
 
 Something to keep in mind in the OOM situations is that the model is probably right in the middle of step, near the end of a forward pass before backward when we are keeping alive a lot of temporaries for the backward pass. So there may be a lot of temporary tensors allocated and taking up parts of blocks. It is possible if you were to back up to the beginning of a step with fewer live temporaries, emptying the allocator caches might be more successful, and it might succeed at the iteration because it will directly cudaMalloc tensors of the new (larger) size:
 
     retry = False
     try:
         step()
-    except CudaOOMException:
+    except torch.cuda.OutOfMemoryError:
         retry = True
         # exception handlers hold on to the stack trace frames,
         # the memory of temporaries will still be alive until
@@ -202,6 +202,17 @@ Something to keep in mind in the OOM situations is that the model is probably ri
 The meaning of metrics
 ----------------------
 
-* TODO: what do each of the metrics mean
-* TODO: how to generate memory snapshots
+The allocator provides a number of metrics, accessed through functions like `torch.cuda.memory_stats()` or `torch.cuda.memory_summary()`, that correspond to the state presented in the pseudo-code above.
+
+* `allocated_bytes` - The sum of the size of all Blocks in the active state. This includes memory added by `round_size`, so for instance a 1 byte allocation will be counted at 512 bytes here. This does not include blocks waiting for to be freed in `process_cross_stream_delayed_free()`.
+* `reserved_bytes` - The sum of the size of all Blocks, regardless of state.
+* `inactive_split_bytes` -  The sum of the size of all Blocks in an inactive state that were split from a larger segment via `maybe_split_block`. This does not include blocks waiting for to be freed in `process_cross_stream_delayed_free()`. These are a potential source of fragmentation because they cannot be returned to CUDA during a cudaMalloc retry since another part of the block is still occupied.
+* `cudaMalloc retries` - The number of times `return_our_possibly_fragmented_memory_to_cuda()` has been called. If this is being called frequently, it indicates that the allocated has failed to reach a goal state and is still regularly calling synchronous cudaFree operations.
+* `CUDA OOMs` - The number of times the allocator has thrown a `OutOfMemoryError`. Most non-interactive programs will not recover from this, but Python notebooks might accumulate multiple OOMs.
+
+What's next
+-----------
+
+To make it easier to understand precisely what happened that lead to an OOM, we've been developing [new tools](https://github.com/pytorch/pytorch/pull/82146) to visualize the state of memory.
+It records Python stack traces with each allocation and keeps the last allocation that existed in each block, and can visualize them with [flamegraphs](https://www.brendangregg.com/flamegraphs.html). In the next post, I will show how to use the tool to debug memory issues.
 
