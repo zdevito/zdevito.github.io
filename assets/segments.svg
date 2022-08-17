@@ -1,0 +1,2016 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="342" onload="init(evt)" viewBox="0 0 1200 342" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="342.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="325" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="325" > </text>
+<g id="frames">
+<g >
+<title>module.py:1186:_call_impl (2,030,496 bytes, 1.83%)</title><rect x="677.9" y="213" width="21.6" height="15.0" fill="rgb(229,160,50)" rx="2" ry="2" />
+<text  x="680.93" y="223.5" >m..</text>
+</g>
+<g >
+<title>conv.py:463:forward (100,352 bytes, 0.09%)</title><rect x="775.5" y="53" width="1.1" height="15.0" fill="rgb(246,212,50)" rx="2" ry="2" />
+<text  x="778.50" y="63.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1184.8" y="165" width="4.2" height="15.0" fill="rgb(234,77,7)" rx="2" ry="2" />
+<text  x="1187.78" y="175.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (6,422,528 bytes, 5.78%)</title><rect x="10.0" y="229" width="68.2" height="15.0" fill="rgb(253,49,9)" rx="2" ry="2" />
+<text  x="13.00" y="239.5" >eg.py:1..</text>
+</g>
+<g >
+<title>container.py:204:forward (406,528 bytes, 0.37%)</title><rect x="695.0" y="149" width="4.3" height="15.0" fill="rgb(242,28,43)" rx="2" ry="2" />
+<text  x="697.97" y="159.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (401,408 bytes, 0.36%)</title><rect x="1160.4" y="37" width="4.2" height="15.0" fill="rgb(241,53,15)" rx="2" ry="2" />
+<text  x="1163.39" y="47.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1160.4" y="101" width="4.2" height="15.0" fill="rgb(243,87,30)" rx="2" ry="2" />
+<text  x="1163.39" y="111.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="229" width="278.4" height="15.0" fill="rgb(249,34,32)" rx="2" ry="2" />
+<text  x="803.33" y="239.5" >eg.py:11:&lt;module&gt;</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="780.8" y="101" width="2.2" height="15.0" fill="rgb(227,137,29)" rx="2" ry="2" />
+<text  x="783.83" y="111.5" ></text>
+</g>
+<g >
+<title>functional.py:782:_max_pool2d (802,816 bytes, 0.72%)</title><rect x="1151.9" y="117" width="8.5" height="15.0" fill="rgb(208,142,1)" rx="2" ry="2" />
+<text  x="1154.86" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:745:cuda (20,922,368 bytes, 18.82%)</title><rect x="233.2" y="213" width="222.1" height="15.0" fill="rgb(237,219,32)" rx="2" ry="2" />
+<text  x="236.16" y="223.5" >module.py:745:cuda</text>
+</g>
+<g >
+<title>resnet.py:285:forward (2,007,040 bytes, 1.81%)</title><rect x="700.2" y="197" width="21.3" height="15.0" fill="rgb(224,77,26)" rx="2" ry="2" />
+<text  x="703.19" y="207.5" >r..</text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="133" width="137.7" height="15.0" fill="rgb(207,201,37)" rx="2" ry="2" />
+<text  x="81.18" y="143.5" >module.py:745:&lt;la..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="213" width="17.0" height="15.0" fill="rgb(210,171,29)" rx="2" ry="2" />
+<text  x="458.28" y="223.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (200,704 bytes, 0.18%)</title><rect x="761.8" y="85" width="2.1" height="15.0" fill="rgb(239,5,49)" rx="2" ry="2" />
+<text  x="764.76" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (18,874,368 bytes, 16.98%)</title><rect x="233.2" y="165" width="200.3" height="15.0" fill="rgb(250,152,46)" rx="2" ry="2" />
+<text  x="236.16" y="175.5" >module.py:634:_apply</text>
+</g>
+<g >
+<title>resnet.py:93:forward (100,352 bytes, 0.09%)</title><rect x="1125.3" y="117" width="1.1" height="15.0" fill="rgb(251,99,15)" rx="2" ry="2" />
+<text  x="1128.34" y="127.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (200,704 bytes, 0.18%)</title><rect x="767.0" y="69" width="2.1" height="15.0" fill="rgb(247,10,3)" rx="2" ry="2" />
+<text  x="769.98" y="79.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (200,704 bytes, 0.18%)</title><rect x="1101.2" y="85" width="2.1" height="15.0" fill="rgb(250,45,0)" rx="2" ry="2" />
+<text  x="1104.16" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (1,505,280 bytes, 1.35%)</title><rect x="767.0" y="197" width="16.0" height="15.0" fill="rgb(206,14,39)" rx="2" ry="2" />
+<text  x="769.98" y="207.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="775.5" y="101" width="1.1" height="15.0" fill="rgb(241,96,35)" rx="2" ry="2" />
+<text  x="778.50" y="111.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,007,040 bytes, 1.81%)</title><rect x="722.5" y="245" width="21.3" height="15.0" fill="rgb(251,112,4)" rx="2" ry="2" />
+<text  x="725.45" y="255.5" >a..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="769.1" y="101" width="2.1" height="15.0" fill="rgb(228,61,40)" rx="2" ry="2" />
+<text  x="772.11" y="111.5" ></text>
+</g>
+<g >
+<title>module.py:745:cuda (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="213" width="137.7" height="15.0" fill="rgb(231,23,52)" rx="2" ry="2" />
+<text  x="81.18" y="223.5" >module.py:745:cuda</text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (3,211,264 bytes, 2.89%)</title><rect x="44.1" y="133" width="34.1" height="15.0" fill="rgb(220,123,43)" rx="2" ry="2" />
+<text  x="47.09" y="143.5" >fu..</text>
+</g>
+<g >
+<title>resnet.py:274:_forward_impl (401,408 bytes, 0.36%)</title><rect x="739.5" y="181" width="4.3" height="15.0" fill="rgb(251,31,5)" rx="2" ry="2" />
+<text  x="742.50" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="165" width="69.6" height="15.0" fill="rgb(254,168,48)" rx="2" ry="2" />
+<text  x="611.33" y="175.5" >module...</text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (200,704 bytes, 0.18%)</title><rect x="1123.2" y="181" width="2.1" height="15.0" fill="rgb(212,200,35)" rx="2" ry="2" />
+<text  x="1126.21" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,048,576 bytes, 0.94%)</title><rect x="1089.8" y="165" width="11.1" height="15.0" fill="rgb(245,159,0)" rx="2" ry="2" />
+<text  x="1092.81" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (2,048,000 bytes, 1.84%)</title><rect x="433.5" y="165" width="21.8" height="15.0" fill="rgb(209,13,41)" rx="2" ry="2" />
+<text  x="436.54" y="175.5" >m..</text>
+</g>
+<g >
+<title>module.py:634:_apply (178,200 bytes, 0.16%)</title><rect x="1104.6" y="149" width="1.8" height="15.0" fill="rgb(215,49,11)" rx="2" ry="2" />
+<text  x="1107.55" y="159.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="717.2" y="101" width="4.3" height="15.0" fill="rgb(243,227,7)" rx="2" ry="2" />
+<text  x="720.23" y="111.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (200,704 bytes, 0.18%)</title><rect x="1101.2" y="69" width="2.1" height="15.0" fill="rgb(248,159,3)" rx="2" ry="2" />
+<text  x="1104.16" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:92:forward (200,704 bytes, 0.18%)</title><rect x="1164.6" y="117" width="2.2" height="15.0" fill="rgb(242,27,30)" rx="2" ry="2" />
+<text  x="1167.65" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (524,288 bytes, 0.47%)</title><rect x="1126.4" y="149" width="5.6" height="15.0" fill="rgb(235,56,45)" rx="2" ry="2" />
+<text  x="1129.40" y="159.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (1,404,928 bytes, 1.26%)</title><rect x="1151.9" y="197" width="14.9" height="15.0" fill="rgb(231,171,3)" rx="2" ry="2" />
+<text  x="1154.86" y="207.5" ></text>
+</g>
+<g >
+<title>resnet.py:271:_forward_impl (802,816 bytes, 0.72%)</title><rect x="1151.9" y="181" width="8.5" height="15.0" fill="rgb(242,202,34)" rx="2" ry="2" />
+<text  x="1154.86" y="191.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (200,704 bytes, 0.18%)</title><rect x="1101.2" y="117" width="2.1" height="15.0" fill="rgb(216,111,8)" rx="2" ry="2" />
+<text  x="1104.16" y="127.5" ></text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (401,408 bytes, 0.36%)</title><rect x="761.8" y="181" width="4.2" height="15.0" fill="rgb(234,221,1)" rx="2" ry="2" />
+<text  x="764.76" y="191.5" ></text>
+</g>
+<g >
+<title>active_allocated (11,042,816 bytes, 9.94%)</title><rect x="455.3" y="245" width="117.2" height="15.0" fill="rgb(237,93,30)" rx="2" ry="2" />
+<text  x="458.28" y="255.5" >active_allocated</text>
+</g>
+<g >
+<title>&lt;gaps&gt; (3,373,056 bytes, 3.03%)</title><rect x="572.5" y="229" width="35.8" height="15.0" fill="rgb(205,142,50)" rx="2" ry="2" />
+<text  x="575.52" y="239.5" >&lt;ga..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="761.8" y="165" width="4.2" height="15.0" fill="rgb(232,112,30)" rx="2" ry="2" />
+<text  x="764.76" y="175.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (2,007,040 bytes, 1.81%)</title><rect x="744.7" y="197" width="21.3" height="15.0" fill="rgb(235,132,50)" rx="2" ry="2" />
+<text  x="747.72" y="207.5" >r..</text>
+</g>
+<g >
+<title>resnet.py:274:_forward_impl (1,605,632 bytes, 1.44%)</title><rect x="744.7" y="181" width="17.1" height="15.0" fill="rgb(252,108,30)" rx="2" ry="2" />
+<text  x="747.72" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1123.2" y="101" width="2.1" height="15.0" fill="rgb(242,62,2)" rx="2" ry="2" />
+<text  x="1126.21" y="111.5" ></text>
+</g>
+<g >
+<title>linear.py:114:forward (1,048,576 bytes, 0.94%)</title><rect x="1089.8" y="149" width="11.1" height="15.0" fill="rgb(236,26,17)" rx="2" ry="2" />
+<text  x="1092.81" y="159.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (524,288 bytes, 0.47%)</title><rect x="1126.4" y="133" width="5.6" height="15.0" fill="rgb(253,25,12)" rx="2" ry="2" />
+<text  x="1129.40" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (1,703,936 bytes, 1.53%)</title><rect x="1126.4" y="165" width="18.1" height="15.0" fill="rgb(222,196,19)" rx="2" ry="2" />
+<text  x="1129.40" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (18,874,368 bytes, 16.98%)</title><rect x="233.2" y="133" width="200.3" height="15.0" fill="rgb(228,146,15)" rx="2" ry="2" />
+<text  x="236.16" y="143.5" >module.py:745:&lt;lambda&gt;</text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (100,352 bytes, 0.09%)</title><rect x="1125.3" y="85" width="1.1" height="15.0" fill="rgb(252,222,37)" rx="2" ry="2" />
+<text  x="1128.34" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (1,703,936 bytes, 1.53%)</title><rect x="1126.4" y="197" width="18.1" height="15.0" fill="rgb(247,18,44)" rx="2" ry="2" />
+<text  x="1129.40" y="207.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (2,030,496 bytes, 1.83%)</title><rect x="677.9" y="229" width="21.6" height="15.0" fill="rgb(211,112,30)" rx="2" ry="2" />
+<text  x="680.93" y="239.5" >e..</text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (802,816 bytes, 0.72%)</title><rect x="722.5" y="69" width="8.5" height="15.0" fill="rgb(208,197,44)" rx="2" ry="2" />
+<text  x="725.45" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:97:forward (200,704 bytes, 0.18%)</title><rect x="773.4" y="117" width="2.1" height="15.0" fill="rgb(224,119,19)" rx="2" ry="2" />
+<text  x="776.37" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="700.2" y="133" width="17.0" height="15.0" fill="rgb(215,100,52)" rx="2" ry="2" />
+<text  x="703.19" y="143.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (802,816 bytes, 0.72%)</title><rect x="708.7" y="85" width="8.5" height="15.0" fill="rgb(242,105,28)" rx="2" ry="2" />
+<text  x="711.71" y="95.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,097,152 bytes, 1.89%)</title><rect x="1100.9" y="245" width="22.3" height="15.0" fill="rgb(218,38,21)" rx="2" ry="2" />
+<text  x="1103.94" y="255.5" >a..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (2,007,040 bytes, 1.81%)</title><rect x="1167.7" y="213" width="21.3" height="15.0" fill="rgb(233,60,25)" rx="2" ry="2" />
+<text  x="1170.74" y="223.5" >m..</text>
+</g>
+<g >
+<title>container.py:204:forward (401,408 bytes, 0.36%)</title><rect x="761.8" y="149" width="4.2" height="15.0" fill="rgb(207,114,41)" rx="2" ry="2" />
+<text  x="764.76" y="159.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (401,408 bytes, 0.36%)</title><rect x="749.0" y="85" width="4.2" height="15.0" fill="rgb(205,182,27)" rx="2" ry="2" />
+<text  x="751.98" y="95.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="69" width="69.6" height="15.0" fill="rgb(207,72,47)" rx="2" ry="2" />
+<text  x="611.33" y="79.5" >conv.py..</text>
+</g>
+<g >
+<title>conv.py:463:forward (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="85" width="69.6" height="15.0" fill="rgb(231,34,30)" rx="2" ry="2" />
+<text  x="611.33" y="95.5" >conv.py..</text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (1,505,280 bytes, 1.35%)</title><rect x="1106.4" y="133" width="16.0" height="15.0" fill="rgb(235,81,28)" rx="2" ry="2" />
+<text  x="1109.45" y="143.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (401,408 bytes, 0.36%)</title><rect x="1184.8" y="69" width="4.2" height="15.0" fill="rgb(212,126,53)" rx="2" ry="2" />
+<text  x="1187.78" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (118,784 bytes, 0.11%)</title><rect x="1103.3" y="165" width="1.3" height="15.0" fill="rgb(247,107,32)" rx="2" ry="2" />
+<text  x="1106.29" y="175.5" ></text>
+</g>
+<g >
+<title>&lt;gaps&gt; (49,152 bytes, 0.04%)</title><rect x="232.6" y="229" width="0.6" height="15.0" fill="rgb(247,87,33)" rx="2" ry="2" />
+<text  x="235.64" y="239.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (802,816 bytes, 0.72%)</title><rect x="722.5" y="85" width="8.5" height="15.0" fill="rgb(235,208,34)" rx="2" ry="2" />
+<text  x="725.45" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="165" width="17.0" height="15.0" fill="rgb(230,119,10)" rx="2" ry="2" />
+<text  x="458.28" y="175.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="229" width="17.0" height="15.0" fill="rgb(226,41,35)" rx="2" ry="2" />
+<text  x="458.28" y="239.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (100,352 bytes, 0.09%)</title><rect x="777.6" y="117" width="1.1" height="15.0" fill="rgb(248,18,30)" rx="2" ry="2" />
+<text  x="780.63" y="127.5" ></text>
+</g>
+<g >
+<title>resnet.py:274:_forward_impl (406,528 bytes, 0.37%)</title><rect x="695.0" y="181" width="4.3" height="15.0" fill="rgb(245,208,4)" rx="2" ry="2" />
+<text  x="697.97" y="191.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (401,408 bytes, 0.36%)</title><rect x="749.0" y="69" width="4.2" height="15.0" fill="rgb(210,23,33)" rx="2" ry="2" />
+<text  x="751.98" y="79.5" ></text>
+</g>
+<g >
+<title>inactive (90,112 bytes, 0.08%)</title><rect x="1166.8" y="245" width="0.9" height="15.0" fill="rgb(224,23,50)" rx="2" ry="2" />
+<text  x="1169.78" y="255.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="149" width="12.5" height="15.0" fill="rgb(236,11,6)" rx="2" ry="2" />
+<text  x="223.09" y="159.5" ></text>
+</g>
+<g >
+<title>resnet.py:268:_forward_impl (3,211,264 bytes, 2.89%)</title><rect x="10.0" y="181" width="34.1" height="15.0" fill="rgb(233,48,25)" rx="2" ry="2" />
+<text  x="13.00" y="191.5" >re..</text>
+</g>
+<g >
+<title>resnet.py:96:forward (802,816 bytes, 0.72%)</title><rect x="677.9" y="117" width="8.5" height="15.0" fill="rgb(214,196,2)" rx="2" ry="2" />
+<text  x="680.93" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="761.8" y="101" width="2.1" height="15.0" fill="rgb(251,20,5)" rx="2" ry="2" />
+<text  x="764.76" y="111.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (401,408 bytes, 0.36%)</title><rect x="695.0" y="85" width="4.2" height="15.0" fill="rgb(243,40,45)" rx="2" ry="2" />
+<text  x="697.98" y="95.5" ></text>
+</g>
+<g >
+<title>seg_140208689381376 (2,097,152 bytes, 1.89%)</title><rect x="1123.2" y="261" width="22.3" height="15.0" fill="rgb(217,203,26)" rx="2" ry="2" />
+<text  x="1126.21" y="271.5" >s..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="677.9" y="101" width="8.5" height="15.0" fill="rgb(239,73,3)" rx="2" ry="2" />
+<text  x="680.93" y="111.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="197" width="69.6" height="15.0" fill="rgb(219,181,20)" rx="2" ry="2" />
+<text  x="611.33" y="207.5" >resnet...</text>
+</g>
+<g >
+<title>seg_140208550969344 (27,262,976 bytes, 24.53%)</title><rect x="789.2" y="261" width="289.5" height="15.0" fill="rgb(227,29,3)" rx="2" ry="2" />
+<text  x="792.25" y="271.5" >seg_140208550969344</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1123.2" y="133" width="2.1" height="15.0" fill="rgb(249,12,41)" rx="2" ry="2" />
+<text  x="1126.21" y="143.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (401,408 bytes, 0.36%)</title><rect x="717.2" y="117" width="4.3" height="15.0" fill="rgb(210,194,33)" rx="2" ry="2" />
+<text  x="720.23" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="739.5" y="165" width="4.3" height="15.0" fill="rgb(232,164,21)" rx="2" ry="2" />
+<text  x="742.50" y="175.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (401,408 bytes, 0.36%)</title><rect x="757.5" y="69" width="4.3" height="15.0" fill="rgb(211,228,2)" rx="2" ry="2" />
+<text  x="760.50" y="79.5" ></text>
+</g>
+<g >
+<title>eg.py:10:&lt;module&gt; (602,112 bytes, 0.54%)</title><rect x="1145.5" y="229" width="6.4" height="15.0" fill="rgb(231,150,21)" rx="2" ry="2" />
+<text  x="1148.47" y="239.5" ></text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="181" width="12.5" height="15.0" fill="rgb(209,193,6)" rx="2" ry="2" />
+<text  x="223.09" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="775.5" y="69" width="1.1" height="15.0" fill="rgb(249,197,42)" rx="2" ry="2" />
+<text  x="778.50" y="79.5" ></text>
+</g>
+<g >
+<title>inactive (27,262,976 bytes, 24.53%)</title><rect x="789.2" y="245" width="289.5" height="15.0" fill="rgb(246,161,31)" rx="2" ry="2" />
+<text  x="792.25" y="255.5" >inactive</text>
+</g>
+<g >
+<title>module.py:657:_apply (171,008 bytes, 0.15%)</title><rect x="1104.6" y="133" width="1.8" height="15.0" fill="rgb(206,148,42)" rx="2" ry="2" />
+<text  x="1107.55" y="143.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (401,408 bytes, 0.36%)</title><rect x="695.0" y="69" width="4.2" height="15.0" fill="rgb(246,61,17)" rx="2" ry="2" />
+<text  x="697.98" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:280:_forward_impl (1,048,576 bytes, 0.94%)</title><rect x="1089.8" y="181" width="11.1" height="15.0" fill="rgb(231,77,49)" rx="2" ry="2" />
+<text  x="1092.81" y="191.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (1,605,632 bytes, 1.44%)</title><rect x="744.7" y="149" width="17.1" height="15.0" fill="rgb(213,166,31)" rx="2" ry="2" />
+<text  x="747.72" y="159.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,007,040 bytes, 1.81%)</title><rect x="1167.7" y="245" width="21.3" height="15.0" fill="rgb(205,43,39)" rx="2" ry="2" />
+<text  x="1170.74" y="255.5" >a..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (2,007,040 bytes, 1.81%)</title><rect x="700.2" y="213" width="21.3" height="15.0" fill="rgb(213,121,17)" rx="2" ry="2" />
+<text  x="703.19" y="223.5" >m..</text>
+</g>
+<g >
+<title>&lt;gaps&gt; (18,112 bytes, 0.02%)</title><rect x="1100.9" y="229" width="0.2" height="15.0" fill="rgb(228,20,17)" rx="2" ry="2" />
+<text  x="1103.94" y="239.5" ></text>
+</g>
+<g >
+<title>functional.py:782:_max_pool2d (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="117" width="17.0" height="15.0" fill="rgb(227,31,26)" rx="2" ry="2" />
+<text  x="458.28" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:681:_apply (30,848 bytes, 0.03%)</title><rect x="1122.4" y="149" width="0.4" height="15.0" fill="rgb(244,97,33)" rx="2" ry="2" />
+<text  x="1125.43" y="159.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (100,352 bytes, 0.09%)</title><rect x="1125.3" y="149" width="1.1" height="15.0" fill="rgb(244,87,10)" rx="2" ry="2" />
+<text  x="1128.34" y="159.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (1,605,632 bytes, 1.44%)</title><rect x="722.5" y="149" width="17.0" height="15.0" fill="rgb(216,84,28)" rx="2" ry="2" />
+<text  x="725.45" y="159.5" ></text>
+</g>
+<g >
+<title>_jit_internal.py:485:fn (802,816 bytes, 0.72%)</title><rect x="1151.9" y="133" width="8.5" height="15.0" fill="rgb(237,166,40)" rx="2" ry="2" />
+<text  x="1154.86" y="143.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (100,352 bytes, 0.09%)</title><rect x="777.6" y="85" width="1.1" height="15.0" fill="rgb(250,149,18)" rx="2" ry="2" />
+<text  x="780.63" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (1,048,576 bytes, 0.94%)</title><rect x="1089.8" y="197" width="11.1" height="15.0" fill="rgb(244,135,0)" rx="2" ry="2" />
+<text  x="1092.81" y="207.5" ></text>
+</g>
+<g >
+<title>seg_140208578232320 (2,097,152 bytes, 1.89%)</title><rect x="1078.7" y="261" width="22.2" height="15.0" fill="rgb(250,151,36)" rx="2" ry="2" />
+<text  x="1081.68" y="271.5" >s..</text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (322,048 bytes, 0.29%)</title><rect x="1101.1" y="229" width="3.5" height="15.0" fill="rgb(239,89,26)" rx="2" ry="2" />
+<text  x="1104.14" y="239.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="722.5" y="133" width="17.0" height="15.0" fill="rgb(226,31,7)" rx="2" ry="2" />
+<text  x="725.45" y="143.5" ></text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (200,704 bytes, 0.18%)</title><rect x="1101.2" y="181" width="2.1" height="15.0" fill="rgb(219,165,2)" rx="2" ry="2" />
+<text  x="1104.16" y="191.5" ></text>
+</g>
+<g >
+<title>seg_140208540483584 (2,097,152 bytes, 1.89%)</title><rect x="677.9" y="261" width="22.3" height="15.0" fill="rgb(253,174,7)" rx="2" ry="2" />
+<text  x="680.92" y="271.5" >s..</text>
+</g>
+<g >
+<title>resnet.py:96:forward (401,408 bytes, 0.36%)</title><rect x="739.5" y="117" width="4.3" height="15.0" fill="rgb(243,92,8)" rx="2" ry="2" />
+<text  x="742.50" y="127.5" ></text>
+</g>
+<g >
+<title>inactive (66,560 bytes, 0.06%)</title><rect x="699.5" y="245" width="0.7" height="15.0" fill="rgb(231,160,5)" rx="2" ry="2" />
+<text  x="702.48" y="255.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="213" width="12.5" height="15.0" fill="rgb(223,25,16)" rx="2" ry="2" />
+<text  x="223.09" y="223.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (1,505,280 bytes, 1.35%)</title><rect x="1106.4" y="149" width="16.0" height="15.0" fill="rgb(244,24,52)" rx="2" ry="2" />
+<text  x="1109.45" y="159.5" ></text>
+</g>
+<g >
+<title>inactive (9,928,704 bytes, 8.93%)</title><rect x="572.5" y="245" width="105.4" height="15.0" fill="rgb(254,136,7)" rx="2" ry="2" />
+<text  x="575.52" y="255.5" >inactive</text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (42,144 bytes, 0.04%)</title><rect x="1122.8" y="165" width="0.4" height="15.0" fill="rgb(230,23,23)" rx="2" ry="2" />
+<text  x="1125.75" y="175.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (802,816 bytes, 0.72%)</title><rect x="700.2" y="69" width="8.5" height="15.0" fill="rgb(233,70,12)" rx="2" ry="2" />
+<text  x="703.19" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:273:_forward_impl (1,605,632 bytes, 1.44%)</title><rect x="1167.7" y="181" width="17.1" height="15.0" fill="rgb(212,19,21)" rx="2" ry="2" />
+<text  x="1170.74" y="191.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (100,352 bytes, 0.09%)</title><rect x="1125.3" y="69" width="1.1" height="15.0" fill="rgb(206,139,25)" rx="2" ry="2" />
+<text  x="1128.34" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:745:cuda (1,703,936 bytes, 1.53%)</title><rect x="1126.4" y="213" width="18.1" height="15.0" fill="rgb(228,126,28)" rx="2" ry="2" />
+<text  x="1129.40" y="223.5" ></text>
+</g>
+<g >
+<title>resnet.py:274:_forward_impl (401,408 bytes, 0.36%)</title><rect x="717.2" y="181" width="4.3" height="15.0" fill="rgb(206,100,36)" rx="2" ry="2" />
+<text  x="720.23" y="191.5" ></text>
+</g>
+<g >
+<title>resnet.py:274:_forward_impl (401,408 bytes, 0.36%)</title><rect x="1160.4" y="181" width="4.2" height="15.0" fill="rgb(235,95,11)" rx="2" ry="2" />
+<text  x="1163.39" y="191.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="85" width="278.4" height="15.0" fill="rgb(227,50,6)" rx="2" ry="2" />
+<text  x="803.33" y="95.5" >conv.py:463:forward</text>
+</g>
+<g >
+<title>resnet.py:274:_forward_impl (401,408 bytes, 0.36%)</title><rect x="1184.8" y="181" width="4.2" height="15.0" fill="rgb(218,25,43)" rx="2" ry="2" />
+<text  x="1187.78" y="191.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (802,816 bytes, 0.72%)</title><rect x="1167.7" y="85" width="8.6" height="15.0" fill="rgb(232,176,33)" rx="2" ry="2" />
+<text  x="1170.74" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="753.2" y="101" width="4.3" height="15.0" fill="rgb(221,45,44)" rx="2" ry="2" />
+<text  x="756.24" y="111.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="229" width="12.5" height="15.0" fill="rgb(230,17,39)" rx="2" ry="2" />
+<text  x="223.09" y="239.5" ></text>
+</g>
+<g >
+<title>eg.py:8:&lt;module&gt; (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="229" width="100.2" height="15.0" fill="rgb(218,126,18)" rx="2" ry="2" />
+<text  x="475.33" y="239.5" >eg.py:8:&lt;mod..</text>
+</g>
+<g >
+<title>container.py:204:forward (401,408 bytes, 0.36%)</title><rect x="717.2" y="149" width="4.3" height="15.0" fill="rgb(240,191,7)" rx="2" ry="2" />
+<text  x="720.23" y="159.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (401,408 bytes, 0.36%)</title><rect x="757.5" y="85" width="4.3" height="15.0" fill="rgb(229,223,5)" rx="2" ry="2" />
+<text  x="760.50" y="95.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (200,704 bytes, 0.18%)</title><rect x="769.1" y="69" width="2.1" height="15.0" fill="rgb(234,210,11)" rx="2" ry="2" />
+<text  x="772.11" y="79.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (802,816 bytes, 0.72%)</title><rect x="708.7" y="69" width="8.5" height="15.0" fill="rgb(236,140,7)" rx="2" ry="2" />
+<text  x="711.71" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="722.5" y="101" width="8.5" height="15.0" fill="rgb(250,186,4)" rx="2" ry="2" />
+<text  x="725.45" y="111.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="744.7" y="165" width="17.1" height="15.0" fill="rgb(225,123,21)" rx="2" ry="2" />
+<text  x="747.72" y="175.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (802,816 bytes, 0.72%)</title><rect x="1176.3" y="117" width="8.5" height="15.0" fill="rgb(239,17,20)" rx="2" ry="2" />
+<text  x="1179.26" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (1,714,328 bytes, 1.54%)</title><rect x="1104.6" y="181" width="18.2" height="15.0" fill="rgb(221,184,5)" rx="2" ry="2" />
+<text  x="1107.55" y="191.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (200,704 bytes, 0.18%)</title><rect x="1164.6" y="69" width="2.2" height="15.0" fill="rgb(225,20,9)" rx="2" ry="2" />
+<text  x="1167.65" y="79.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (802,816 bytes, 0.72%)</title><rect x="1167.7" y="69" width="8.6" height="15.0" fill="rgb(211,209,28)" rx="2" ry="2" />
+<text  x="1170.74" y="79.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (802,816 bytes, 0.72%)</title><rect x="677.9" y="85" width="8.5" height="15.0" fill="rgb(250,150,4)" rx="2" ry="2" />
+<text  x="680.93" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:96:forward (200,704 bytes, 0.18%)</title><rect x="778.7" y="117" width="2.1" height="15.0" fill="rgb(219,70,44)" rx="2" ry="2" />
+<text  x="781.70" y="127.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,004,992 bytes, 1.80%)</title><rect x="1123.2" y="245" width="21.3" height="15.0" fill="rgb(216,28,35)" rx="2" ry="2" />
+<text  x="1126.21" y="255.5" >a..</text>
+</g>
+<g >
+<title>container.py:204:forward (1,605,632 bytes, 1.44%)</title><rect x="700.2" y="149" width="17.0" height="15.0" fill="rgb(228,194,20)" rx="2" ry="2" />
+<text  x="703.19" y="159.5" ></text>
+</g>
+<g >
+<title>inactive (90,112 bytes, 0.08%)</title><rect x="766.0" y="245" width="1.0" height="15.0" fill="rgb(238,220,12)" rx="2" ry="2" />
+<text  x="769.02" y="255.5" ></text>
+</g>
+<g >
+<title>resnet.py:92:forward (401,408 bytes, 0.36%)</title><rect x="744.7" y="117" width="4.3" height="15.0" fill="rgb(207,15,46)" rx="2" ry="2" />
+<text  x="747.72" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="776.6" y="101" width="1.0" height="15.0" fill="rgb(231,36,38)" rx="2" ry="2" />
+<text  x="779.57" y="111.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (802,816 bytes, 0.72%)</title><rect x="1176.3" y="85" width="8.5" height="15.0" fill="rgb(206,70,51)" rx="2" ry="2" />
+<text  x="1179.26" y="95.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="69" width="278.4" height="15.0" fill="rgb(250,202,43)" rx="2" ry="2" />
+<text  x="803.33" y="79.5" >conv.py:459:_conv_forward</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="677.9" y="165" width="17.1" height="15.0" fill="rgb(250,114,18)" rx="2" ry="2" />
+<text  x="680.93" y="175.5" ></text>
+</g>
+<g >
+<title>seg_140208546775040 (2,097,152 bytes, 1.89%)</title><rect x="744.7" y="261" width="22.3" height="15.0" fill="rgb(249,138,9)" rx="2" ry="2" />
+<text  x="747.72" y="271.5" >s..</text>
+</g>
+<g >
+<title>seg_140208701964288 (2,097,152 bytes, 1.89%)</title><rect x="1167.7" y="261" width="22.3" height="15.0" fill="rgb(249,123,8)" rx="2" ry="2" />
+<text  x="1170.74" y="271.5" >s..</text>
+</g>
+<g >
+<title>resnet.py:273:_forward_impl (1,605,632 bytes, 1.44%)</title><rect x="722.5" y="181" width="17.0" height="15.0" fill="rgb(239,39,8)" rx="2" ry="2" />
+<text  x="725.45" y="191.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (100,352 bytes, 0.09%)</title><rect x="775.5" y="37" width="1.1" height="15.0" fill="rgb(224,211,26)" rx="2" ry="2" />
+<text  x="778.50" y="47.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="197" width="17.0" height="15.0" fill="rgb(242,229,34)" rx="2" ry="2" />
+<text  x="458.28" y="207.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="165" width="12.5" height="15.0" fill="rgb(222,217,11)" rx="2" ry="2" />
+<text  x="223.09" y="175.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (200,704 bytes, 0.18%)</title><rect x="778.7" y="85" width="2.1" height="15.0" fill="rgb(250,214,46)" rx="2" ry="2" />
+<text  x="781.70" y="95.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (301,056 bytes, 0.27%)</title><rect x="1123.2" y="229" width="3.2" height="15.0" fill="rgb(219,222,48)" rx="2" ry="2" />
+<text  x="1126.21" y="239.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (702,464 bytes, 0.63%)</title><rect x="775.5" y="149" width="7.5" height="15.0" fill="rgb(241,5,0)" rx="2" ry="2" />
+<text  x="778.50" y="159.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="686.4" y="101" width="8.6" height="15.0" fill="rgb(249,39,20)" rx="2" ry="2" />
+<text  x="689.45" y="111.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="757.5" y="101" width="4.3" height="15.0" fill="rgb(224,216,20)" rx="2" ry="2" />
+<text  x="760.50" y="111.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="101" width="12.5" height="15.0" fill="rgb(209,148,48)" rx="2" ry="2" />
+<text  x="223.09" y="111.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (100,352 bytes, 0.09%)</title><rect x="776.6" y="85" width="1.0" height="15.0" fill="rgb(248,206,20)" rx="2" ry="2" />
+<text  x="779.57" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="744.7" y="133" width="17.1" height="15.0" fill="rgb(222,170,14)" rx="2" ry="2" />
+<text  x="747.72" y="143.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (401,408 bytes, 0.36%)</title><rect x="744.7" y="85" width="4.3" height="15.0" fill="rgb(215,74,19)" rx="2" ry="2" />
+<text  x="747.72" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="197" width="12.5" height="15.0" fill="rgb(252,54,32)" rx="2" ry="2" />
+<text  x="223.09" y="207.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="1176.3" y="101" width="8.5" height="15.0" fill="rgb(225,185,33)" rx="2" ry="2" />
+<text  x="1179.26" y="111.5" ></text>
+</g>
+<g >
+<title>resnet.py:92:forward (100,352 bytes, 0.09%)</title><rect x="776.6" y="117" width="1.0" height="15.0" fill="rgb(250,92,41)" rx="2" ry="2" />
+<text  x="779.57" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="749.0" y="101" width="4.2" height="15.0" fill="rgb(209,207,8)" rx="2" ry="2" />
+<text  x="751.98" y="111.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,007,040 bytes, 1.81%)</title><rect x="1145.5" y="245" width="21.3" height="15.0" fill="rgb(235,46,7)" rx="2" ry="2" />
+<text  x="1148.47" y="255.5" >a..</text>
+</g>
+<g >
+<title>resnet.py:100:forward (100,352 bytes, 0.09%)</title><rect x="775.5" y="117" width="1.1" height="15.0" fill="rgb(210,66,17)" rx="2" ry="2" />
+<text  x="778.50" y="127.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (322,048 bytes, 0.29%)</title><rect x="1101.1" y="197" width="3.5" height="15.0" fill="rgb(213,144,8)" rx="2" ry="2" />
+<text  x="1104.14" y="207.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (2,007,040 bytes, 1.81%)</title><rect x="722.5" y="213" width="21.3" height="15.0" fill="rgb(221,58,28)" rx="2" ry="2" />
+<text  x="725.45" y="223.5" >m..</text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (401,408 bytes, 0.36%)</title><rect x="739.5" y="69" width="4.3" height="15.0" fill="rgb(240,121,18)" rx="2" ry="2" />
+<text  x="742.50" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:271:_forward_impl (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="181" width="17.0" height="15.0" fill="rgb(238,94,2)" rx="2" ry="2" />
+<text  x="458.28" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (1,714,328 bytes, 1.54%)</title><rect x="1104.6" y="165" width="18.2" height="15.0" fill="rgb(212,80,30)" rx="2" ry="2" />
+<text  x="1107.55" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (18,874,368 bytes, 16.98%)</title><rect x="233.2" y="149" width="200.3" height="15.0" fill="rgb(236,202,2)" rx="2" ry="2" />
+<text  x="236.16" y="159.5" >module.py:657:_apply</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="1167.7" y="133" width="17.1" height="15.0" fill="rgb(231,210,23)" rx="2" ry="2" />
+<text  x="1170.74" y="143.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (401,408 bytes, 0.36%)</title><rect x="1160.4" y="53" width="4.2" height="15.0" fill="rgb(210,192,30)" rx="2" ry="2" />
+<text  x="1163.39" y="63.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="149" width="69.6" height="15.0" fill="rgb(229,117,15)" rx="2" ry="2" />
+<text  x="611.33" y="159.5" >contain..</text>
+</g>
+<g >
+<title>container.py:204:forward (100,352 bytes, 0.09%)</title><rect x="775.5" y="85" width="1.1" height="15.0" fill="rgb(251,47,10)" rx="2" ry="2" />
+<text  x="778.50" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (10,240 bytes, 0.01%)</title><rect x="699.3" y="181" width="0.1" height="15.0" fill="rgb(215,152,15)" rx="2" ry="2" />
+<text  x="702.29" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="677.9" y="133" width="17.1" height="15.0" fill="rgb(224,38,39)" rx="2" ry="2" />
+<text  x="680.93" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (18,874,368 bytes, 16.98%)</title><rect x="233.2" y="181" width="200.3" height="15.0" fill="rgb(215,176,43)" rx="2" ry="2" />
+<text  x="236.16" y="191.5" >module.py:634:_apply</text>
+</g>
+<g >
+<title>module.py:657:_apply (1,179,648 bytes, 1.06%)</title><rect x="1132.0" y="149" width="12.5" height="15.0" fill="rgb(234,36,13)" rx="2" ry="2" />
+<text  x="1134.97" y="159.5" ></text>
+</g>
+<g >
+<title>resnet.py:100:forward (200,704 bytes, 0.18%)</title><rect x="761.8" y="117" width="2.1" height="15.0" fill="rgb(210,87,10)" rx="2" ry="2" />
+<text  x="764.76" y="127.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (401,408 bytes, 0.36%)</title><rect x="753.2" y="85" width="4.3" height="15.0" fill="rgb(223,7,40)" rx="2" ry="2" />
+<text  x="756.24" y="95.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (100,352 bytes, 0.09%)</title><rect x="776.6" y="69" width="1.0" height="15.0" fill="rgb(212,4,42)" rx="2" ry="2" />
+<text  x="779.57" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="1125.3" y="133" width="1.1" height="15.0" fill="rgb(208,104,33)" rx="2" ry="2" />
+<text  x="1128.34" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="133" width="278.4" height="15.0" fill="rgb(231,146,46)" rx="2" ry="2" />
+<text  x="803.33" y="143.5" >module.py:1186:_call_impl</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1101.2" y="101" width="2.1" height="15.0" fill="rgb(239,208,29)" rx="2" ry="2" />
+<text  x="1104.16" y="111.5" ></text>
+</g>
+<g >
+<title>seg_140208542580736 (2,097,152 bytes, 1.89%)</title><rect x="700.2" y="261" width="22.3" height="15.0" fill="rgb(234,88,34)" rx="2" ry="2" />
+<text  x="703.19" y="271.5" >s..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (702,464 bytes, 0.63%)</title><rect x="775.5" y="133" width="7.5" height="15.0" fill="rgb(250,167,23)" rx="2" ry="2" />
+<text  x="778.50" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="213" width="278.4" height="15.0" fill="rgb(215,80,26)" rx="2" ry="2" />
+<text  x="803.33" y="223.5" >module.py:1186:_call_impl</text>
+</g>
+<g >
+<title>seg_140208691478528 (2,097,152 bytes, 1.89%)</title><rect x="1145.5" y="261" width="22.2" height="15.0" fill="rgb(239,5,46)" rx="2" ry="2" />
+<text  x="1148.47" y="271.5" >s..</text>
+</g>
+<g >
+<title>resnet.py:92:forward (100,352 bytes, 0.09%)</title><rect x="1103.3" y="117" width="1.1" height="15.0" fill="rgb(251,14,37)" rx="2" ry="2" />
+<text  x="1106.34" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1160.4" y="69" width="4.2" height="15.0" fill="rgb(232,220,38)" rx="2" ry="2" />
+<text  x="1163.39" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:92:forward (200,704 bytes, 0.18%)</title><rect x="767.0" y="117" width="2.1" height="15.0" fill="rgb(216,86,51)" rx="2" ry="2" />
+<text  x="769.98" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (6,422,528 bytes, 5.78%)</title><rect x="10.0" y="213" width="68.2" height="15.0" fill="rgb(215,148,44)" rx="2" ry="2" />
+<text  x="13.00" y="223.5" >module...</text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (802,816 bytes, 0.72%)</title><rect x="731.0" y="85" width="8.5" height="15.0" fill="rgb(209,138,48)" rx="2" ry="2" />
+<text  x="733.98" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="761.8" y="133" width="4.2" height="15.0" fill="rgb(234,83,35)" rx="2" ry="2" />
+<text  x="764.76" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="149" width="100.2" height="15.0" fill="rgb(234,10,27)" rx="2" ry="2" />
+<text  x="475.33" y="159.5" >module.py:65..</text>
+</g>
+<g >
+<title>resnet.py:92:forward (802,816 bytes, 0.72%)</title><rect x="700.2" y="117" width="8.5" height="15.0" fill="rgb(251,110,19)" rx="2" ry="2" />
+<text  x="703.19" y="127.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (200,704 bytes, 0.18%)</title><rect x="773.4" y="69" width="2.1" height="15.0" fill="rgb(242,171,26)" rx="2" ry="2" />
+<text  x="776.37" y="79.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (1,605,632 bytes, 1.44%)</title><rect x="677.9" y="149" width="17.1" height="15.0" fill="rgb(230,78,50)" rx="2" ry="2" />
+<text  x="680.93" y="159.5" ></text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (30,848 bytes, 0.03%)</title><rect x="1122.4" y="133" width="0.4" height="15.0" fill="rgb(233,149,39)" rx="2" ry="2" />
+<text  x="1125.43" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (322,048 bytes, 0.29%)</title><rect x="1101.1" y="213" width="3.5" height="15.0" fill="rgb(207,209,45)" rx="2" ry="2" />
+<text  x="1104.14" y="223.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (200,704 bytes, 0.18%)</title><rect x="771.2" y="69" width="2.2" height="15.0" fill="rgb(212,61,1)" rx="2" ry="2" />
+<text  x="774.24" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="739.5" y="133" width="4.3" height="15.0" fill="rgb(233,162,9)" rx="2" ry="2" />
+<text  x="742.50" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1123.2" y="165" width="2.1" height="15.0" fill="rgb(214,168,23)" rx="2" ry="2" />
+<text  x="1126.21" y="175.5" ></text>
+</g>
+<g >
+<title>all (111,149,056 bytes, 100%)</title><rect x="10.0" y="293" width="1180.0" height="15.0" fill="rgb(224,111,17)" rx="2" ry="2" />
+<text  x="13.00" y="303.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="778.7" y="101" width="2.1" height="15.0" fill="rgb(237,203,4)" rx="2" ry="2" />
+<text  x="781.70" y="111.5" ></text>
+</g>
+<g >
+<title>active_allocated (19,398,656 bytes, 17.45%)</title><rect x="10.0" y="245" width="205.9" height="15.0" fill="rgb(242,90,36)" rx="2" ry="2" />
+<text  x="13.00" y="255.5" >active_allocated</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1160.4" y="165" width="4.2" height="15.0" fill="rgb(209,200,34)" rx="2" ry="2" />
+<text  x="1163.39" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="771.2" y="101" width="2.2" height="15.0" fill="rgb(218,196,44)" rx="2" ry="2" />
+<text  x="774.24" y="111.5" ></text>
+</g>
+<g >
+<title>inactive (90,112 bytes, 0.08%)</title><rect x="721.5" y="245" width="1.0" height="15.0" fill="rgb(237,95,48)" rx="2" ry="2" />
+<text  x="724.50" y="255.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (3,211,264 bytes, 2.89%)</title><rect x="44.1" y="165" width="34.1" height="15.0" fill="rgb(243,6,46)" rx="2" ry="2" />
+<text  x="47.09" y="175.5" >mo..</text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (1,505,280 bytes, 1.35%)</title><rect x="767.0" y="229" width="16.0" height="15.0" fill="rgb(250,184,12)" rx="2" ry="2" />
+<text  x="769.98" y="239.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (200,704 bytes, 0.18%)</title><rect x="1123.2" y="85" width="2.1" height="15.0" fill="rgb(207,62,2)" rx="2" ry="2" />
+<text  x="1126.21" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="767.0" y="133" width="8.5" height="15.0" fill="rgb(221,91,35)" rx="2" ry="2" />
+<text  x="769.98" y="143.5" ></text>
+</g>
+<g >
+<title>resnet.py:97:forward (802,816 bytes, 0.72%)</title><rect x="731.0" y="117" width="8.5" height="15.0" fill="rgb(222,11,35)" rx="2" ry="2" />
+<text  x="733.98" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="133" width="100.2" height="15.0" fill="rgb(212,198,34)" rx="2" ry="2" />
+<text  x="475.33" y="143.5" >module.py:74..</text>
+</g>
+<g >
+<title>resnet.py:276:_forward_impl (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="181" width="278.4" height="15.0" fill="rgb(254,63,46)" rx="2" ry="2" />
+<text  x="803.33" y="191.5" >resnet.py:276:_forward_impl</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="744.7" y="101" width="4.3" height="15.0" fill="rgb(242,186,25)" rx="2" ry="2" />
+<text  x="747.72" y="111.5" ></text>
+</g>
+<g >
+<title>eg.py:8:&lt;module&gt; (20,922,368 bytes, 18.82%)</title><rect x="233.2" y="229" width="222.1" height="15.0" fill="rgb(217,211,53)" rx="2" ry="2" />
+<text  x="236.16" y="239.5" >eg.py:8:&lt;module&gt;</text>
+</g>
+<g >
+<title>conv.py:463:forward (200,704 bytes, 0.18%)</title><rect x="771.2" y="85" width="2.2" height="15.0" fill="rgb(218,22,40)" rx="2" ry="2" />
+<text  x="774.24" y="95.5" ></text>
+</g>
+<g >
+<title>active_allocated (20,971,520 bytes, 18.87%)</title><rect x="232.6" y="245" width="222.7" height="15.0" fill="rgb(206,99,17)" rx="2" ry="2" />
+<text  x="235.64" y="255.5" >active_allocated</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (406,528 bytes, 0.37%)</title><rect x="695.0" y="133" width="4.3" height="15.0" fill="rgb(233,220,5)" rx="2" ry="2" />
+<text  x="697.97" y="143.5" ></text>
+</g>
+<g >
+<title>seg_140208511123456 (20,971,520 bytes, 18.87%)</title><rect x="455.3" y="261" width="222.6" height="15.0" fill="rgb(226,149,3)" rx="2" ry="2" />
+<text  x="458.28" y="271.5" >seg_140208511123456</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="700.2" y="165" width="17.0" height="15.0" fill="rgb(222,75,50)" rx="2" ry="2" />
+<text  x="703.19" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (702,464 bytes, 0.63%)</title><rect x="775.5" y="165" width="7.5" height="15.0" fill="rgb(220,216,38)" rx="2" ry="2" />
+<text  x="778.50" y="175.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (200,704 bytes, 0.18%)</title><rect x="773.4" y="85" width="2.1" height="15.0" fill="rgb(230,208,1)" rx="2" ry="2" />
+<text  x="776.37" y="95.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (200,704 bytes, 0.18%)</title><rect x="1101.2" y="149" width="2.1" height="15.0" fill="rgb(242,189,54)" rx="2" ry="2" />
+<text  x="1104.16" y="159.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (2,007,040 bytes, 1.81%)</title><rect x="1167.7" y="229" width="21.3" height="15.0" fill="rgb(210,112,54)" rx="2" ry="2" />
+<text  x="1170.74" y="239.5" >e..</text>
+</g>
+<g >
+<title>resnet.py:285:forward (6,422,528 bytes, 5.78%)</title><rect x="10.0" y="197" width="68.2" height="15.0" fill="rgb(251,172,32)" rx="2" ry="2" />
+<text  x="13.00" y="207.5" >resnet...</text>
+</g>
+<g >
+<title>resnet.py:276:_forward_impl (702,464 bytes, 0.63%)</title><rect x="775.5" y="181" width="7.5" height="15.0" fill="rgb(214,163,18)" rx="2" ry="2" />
+<text  x="778.50" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="767.0" y="165" width="8.5" height="15.0" fill="rgb(235,0,16)" rx="2" ry="2" />
+<text  x="769.98" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="1151.9" y="165" width="8.5" height="15.0" fill="rgb(247,36,13)" rx="2" ry="2" />
+<text  x="1154.86" y="175.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (401,408 bytes, 0.36%)</title><rect x="717.2" y="69" width="4.3" height="15.0" fill="rgb(236,77,5)" rx="2" ry="2" />
+<text  x="720.23" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:96:forward (802,816 bytes, 0.72%)</title><rect x="722.5" y="117" width="8.5" height="15.0" fill="rgb(228,225,13)" rx="2" ry="2" />
+<text  x="725.45" y="127.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (200,704 bytes, 0.18%)</title><rect x="761.8" y="53" width="2.1" height="15.0" fill="rgb(246,15,33)" rx="2" ry="2" />
+<text  x="764.76" y="63.5" ></text>
+</g>
+<g >
+<title>resnet.py:276:_forward_impl (118,784 bytes, 0.11%)</title><rect x="1103.3" y="181" width="1.3" height="15.0" fill="rgb(225,24,16)" rx="2" ry="2" />
+<text  x="1106.29" y="191.5" ></text>
+</g>
+<g >
+<title>&lt;gaps&gt; (390,912 bytes, 0.35%)</title><rect x="215.9" y="229" width="4.2" height="15.0" fill="rgb(239,77,51)" rx="2" ry="2" />
+<text  x="218.94" y="239.5" ></text>
+</g>
+<g >
+<title>inactive (92,160 bytes, 0.08%)</title><rect x="1144.5" y="245" width="1.0" height="15.0" fill="rgb(220,119,28)" rx="2" ry="2" />
+<text  x="1147.49" y="255.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (1,605,632 bytes, 1.44%)</title><rect x="1167.7" y="149" width="17.1" height="15.0" fill="rgb(217,199,30)" rx="2" ry="2" />
+<text  x="1170.74" y="159.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="695.0" y="101" width="4.2" height="15.0" fill="rgb(219,62,34)" rx="2" ry="2" />
+<text  x="697.98" y="111.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (301,056 bytes, 0.27%)</title><rect x="1123.2" y="197" width="3.2" height="15.0" fill="rgb(237,177,52)" rx="2" ry="2" />
+<text  x="1126.21" y="207.5" ></text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (171,008 bytes, 0.15%)</title><rect x="1104.6" y="117" width="1.8" height="15.0" fill="rgb(242,128,37)" rx="2" ry="2" />
+<text  x="1107.55" y="127.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="69" width="12.5" height="15.0" fill="rgb(246,214,41)" rx="2" ry="2" />
+<text  x="223.09" y="79.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (401,408 bytes, 0.36%)</title><rect x="1184.8" y="85" width="4.2" height="15.0" fill="rgb(250,223,16)" rx="2" ry="2" />
+<text  x="1187.78" y="95.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (100,352 bytes, 0.09%)</title><rect x="1103.3" y="85" width="1.1" height="15.0" fill="rgb(231,211,16)" rx="2" ry="2" />
+<text  x="1106.34" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="197" width="100.2" height="15.0" fill="rgb(227,209,36)" rx="2" ry="2" />
+<text  x="475.33" y="207.5" >module.py:63..</text>
+</g>
+<g >
+<title>resnet.py:97:forward (401,408 bytes, 0.36%)</title><rect x="757.5" y="117" width="4.3" height="15.0" fill="rgb(243,68,2)" rx="2" ry="2" />
+<text  x="760.50" y="127.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (200,704 bytes, 0.18%)</title><rect x="780.8" y="69" width="2.2" height="15.0" fill="rgb(240,194,18)" rx="2" ry="2" />
+<text  x="783.83" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1101.2" y="165" width="2.1" height="15.0" fill="rgb(232,76,54)" rx="2" ry="2" />
+<text  x="1104.16" y="175.5" ></text>
+</g>
+<g >
+<title>resnet.py:92:forward (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="117" width="12.5" height="15.0" fill="rgb(225,208,21)" rx="2" ry="2" />
+<text  x="223.09" y="127.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (401,408 bytes, 0.36%)</title><rect x="1160.4" y="149" width="4.2" height="15.0" fill="rgb(218,47,18)" rx="2" ry="2" />
+<text  x="1163.39" y="159.5" ></text>
+</g>
+<g >
+<title>seg_140208548872192 (2,097,152 bytes, 1.89%)</title><rect x="767.0" y="261" width="22.2" height="15.0" fill="rgb(253,216,4)" rx="2" ry="2" />
+<text  x="769.98" y="271.5" >s..</text>
+</g>
+<g >
+<title>conv.py:463:forward (802,816 bytes, 0.72%)</title><rect x="700.2" y="85" width="8.5" height="15.0" fill="rgb(226,94,45)" rx="2" ry="2" />
+<text  x="703.19" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:97:forward (200,704 bytes, 0.18%)</title><rect x="780.8" y="117" width="2.2" height="15.0" fill="rgb(245,27,15)" rx="2" ry="2" />
+<text  x="783.83" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="133" width="12.5" height="15.0" fill="rgb(240,141,8)" rx="2" ry="2" />
+<text  x="223.09" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (42,144 bytes, 0.04%)</title><rect x="1122.8" y="181" width="0.4" height="15.0" fill="rgb(245,141,1)" rx="2" ry="2" />
+<text  x="1125.75" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1164.6" y="165" width="2.2" height="15.0" fill="rgb(241,141,11)" rx="2" ry="2" />
+<text  x="1167.65" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="773.4" y="101" width="2.1" height="15.0" fill="rgb(233,205,13)" rx="2" ry="2" />
+<text  x="776.37" y="111.5" ></text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (802,816 bytes, 0.72%)</title><rect x="767.0" y="181" width="8.5" height="15.0" fill="rgb(213,171,41)" rx="2" ry="2" />
+<text  x="769.98" y="191.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (200,704 bytes, 0.18%)</title><rect x="1164.6" y="149" width="2.2" height="15.0" fill="rgb(244,63,42)" rx="2" ry="2" />
+<text  x="1167.65" y="159.5" ></text>
+</g>
+<g >
+<title>active_allocated (1,505,280 bytes, 1.35%)</title><rect x="767.0" y="245" width="16.0" height="15.0" fill="rgb(234,151,50)" rx="2" ry="2" />
+<text  x="769.98" y="255.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="722.5" y="165" width="17.0" height="15.0" fill="rgb(220,167,11)" rx="2" ry="2" />
+<text  x="725.45" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (301,056 bytes, 0.27%)</title><rect x="1123.2" y="213" width="3.2" height="15.0" fill="rgb(242,172,41)" rx="2" ry="2" />
+<text  x="1126.21" y="223.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (802,816 bytes, 0.72%)</title><rect x="686.4" y="69" width="8.6" height="15.0" fill="rgb(207,176,45)" rx="2" ry="2" />
+<text  x="689.45" y="79.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,007,040 bytes, 1.81%)</title><rect x="744.7" y="245" width="21.3" height="15.0" fill="rgb(205,97,44)" rx="2" ry="2" />
+<text  x="747.72" y="255.5" >a..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="777.6" y="101" width="1.1" height="15.0" fill="rgb(207,211,8)" rx="2" ry="2" />
+<text  x="780.63" y="111.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (401,408 bytes, 0.36%)</title><rect x="744.7" y="69" width="4.3" height="15.0" fill="rgb(251,158,51)" rx="2" ry="2" />
+<text  x="747.72" y="79.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (100,352 bytes, 0.09%)</title><rect x="1103.3" y="69" width="1.1" height="15.0" fill="rgb(209,41,44)" rx="2" ry="2" />
+<text  x="1106.34" y="79.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (1,404,928 bytes, 1.26%)</title><rect x="1151.9" y="229" width="14.9" height="15.0" fill="rgb(237,73,11)" rx="2" ry="2" />
+<text  x="1154.86" y="239.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="763.9" y="101" width="2.1" height="15.0" fill="rgb(240,11,22)" rx="2" ry="2" />
+<text  x="766.89" y="111.5" ></text>
+</g>
+<g >
+<title>stream_0 (111,149,056 bytes, 100.00%)</title><rect x="10.0" y="277" width="1180.0" height="15.0" fill="rgb(241,69,37)" rx="2" ry="2" />
+<text  x="13.00" y="287.5" >stream_0</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="165" width="278.4" height="15.0" fill="rgb(230,168,29)" rx="2" ry="2" />
+<text  x="803.33" y="175.5" >module.py:1186:_call_impl</text>
+</g>
+<g >
+<title>resnet.py:285:forward (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="197" width="278.4" height="15.0" fill="rgb(231,157,8)" rx="2" ry="2" />
+<text  x="803.33" y="207.5" >resnet.py:285:forward</text>
+</g>
+<g >
+<title>module.py:745:cuda (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="213" width="100.2" height="15.0" fill="rgb(216,95,38)" rx="2" ry="2" />
+<text  x="475.33" y="223.5" >module.py:74..</text>
+</g>
+<g >
+<title>inactive (2,097,152 bytes, 1.89%)</title><rect x="1078.7" y="245" width="22.2" height="15.0" fill="rgb(239,39,16)" rx="2" ry="2" />
+<text  x="1081.68" y="255.5" >i..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,048,576 bytes, 0.94%)</title><rect x="1089.8" y="213" width="11.1" height="15.0" fill="rgb(208,18,21)" rx="2" ry="2" />
+<text  x="1092.81" y="223.5" ></text>
+</g>
+<g >
+<title>seg_140208687284224 (2,097,152 bytes, 1.89%)</title><rect x="1100.9" y="261" width="22.3" height="15.0" fill="rgb(238,45,27)" rx="2" ry="2" />
+<text  x="1103.94" y="271.5" >s..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1101.2" y="133" width="2.1" height="15.0" fill="rgb(242,211,11)" rx="2" ry="2" />
+<text  x="1104.16" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (406,528 bytes, 0.37%)</title><rect x="695.0" y="165" width="4.3" height="15.0" fill="rgb(227,171,27)" rx="2" ry="2" />
+<text  x="697.97" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (2,048,000 bytes, 1.84%)</title><rect x="433.5" y="181" width="21.8" height="15.0" fill="rgb(205,27,19)" rx="2" ry="2" />
+<text  x="436.54" y="191.5" >m..</text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (802,816 bytes, 0.72%)</title><rect x="731.0" y="69" width="8.5" height="15.0" fill="rgb(243,208,17)" rx="2" ry="2" />
+<text  x="733.98" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:96:forward (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="117" width="69.6" height="15.0" fill="rgb(229,50,38)" rx="2" ry="2" />
+<text  x="611.33" y="127.5" >resnet...</text>
+</g>
+<g >
+<title>inactive (90,112 bytes, 0.08%)</title><rect x="743.8" y="245" width="0.9" height="15.0" fill="rgb(211,173,9)" rx="2" ry="2" />
+<text  x="746.76" y="255.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="1103.3" y="101" width="1.1" height="15.0" fill="rgb(237,60,46)" rx="2" ry="2" />
+<text  x="1106.34" y="111.5" ></text>
+</g>
+<g >
+<title>conv.py:463:forward (200,704 bytes, 0.18%)</title><rect x="767.0" y="85" width="2.1" height="15.0" fill="rgb(211,44,4)" rx="2" ry="2" />
+<text  x="769.98" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,404,928 bytes, 1.26%)</title><rect x="1151.9" y="213" width="14.9" height="15.0" fill="rgb(228,164,6)" rx="2" ry="2" />
+<text  x="1154.86" y="223.5" ></text>
+</g>
+<g >
+<title>pooling.py:166:forward (802,816 bytes, 0.72%)</title><rect x="1151.9" y="149" width="8.5" height="15.0" fill="rgb(236,225,32)" rx="2" ry="2" />
+<text  x="1154.86" y="159.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (200,704 bytes, 0.18%)</title><rect x="769.1" y="85" width="2.1" height="15.0" fill="rgb(254,134,53)" rx="2" ry="2" />
+<text  x="772.11" y="95.5" ></text>
+</g>
+<g >
+<title>resnet.py:97:forward (401,408 bytes, 0.36%)</title><rect x="1184.8" y="117" width="4.2" height="15.0" fill="rgb(243,34,1)" rx="2" ry="2" />
+<text  x="1187.78" y="127.5" ></text>
+</g>
+<g >
+<title>resnet.py:96:forward (200,704 bytes, 0.18%)</title><rect x="771.2" y="117" width="2.2" height="15.0" fill="rgb(212,115,45)" rx="2" ry="2" />
+<text  x="774.24" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:657:_apply (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="149" width="137.7" height="15.0" fill="rgb(206,31,29)" rx="2" ry="2" />
+<text  x="81.18" y="159.5" >module.py:657:_ap..</text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (200,704 bytes, 0.18%)</title><rect x="763.9" y="85" width="2.1" height="15.0" fill="rgb(223,208,33)" rx="2" ry="2" />
+<text  x="766.89" y="95.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (401,408 bytes, 0.36%)</title><rect x="739.5" y="149" width="4.3" height="15.0" fill="rgb(244,4,33)" rx="2" ry="2" />
+<text  x="742.50" y="159.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,030,592 bytes, 1.83%)</title><rect x="677.9" y="245" width="21.6" height="15.0" fill="rgb(220,79,25)" rx="2" ry="2" />
+<text  x="680.92" y="255.5" >a..</text>
+</g>
+<g >
+<title>module.py:634:_apply (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="181" width="100.2" height="15.0" fill="rgb(253,171,38)" rx="2" ry="2" />
+<text  x="475.33" y="191.5" >module.py:63..</text>
+</g>
+<g >
+<title>conv.py:463:forward (401,408 bytes, 0.36%)</title><rect x="739.5" y="85" width="4.3" height="15.0" fill="rgb(220,97,8)" rx="2" ry="2" />
+<text  x="742.50" y="95.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (802,816 bytes, 0.72%)</title><rect x="677.9" y="69" width="8.5" height="15.0" fill="rgb(223,62,51)" rx="2" ry="2" />
+<text  x="680.93" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1184.8" y="101" width="4.2" height="15.0" fill="rgb(248,14,34)" rx="2" ry="2" />
+<text  x="1187.78" y="111.5" ></text>
+</g>
+<g >
+<title>resnet.py:92:forward (802,816 bytes, 0.72%)</title><rect x="1167.7" y="117" width="8.6" height="15.0" fill="rgb(225,80,4)" rx="2" ry="2" />
+<text  x="1170.74" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,505,280 bytes, 1.35%)</title><rect x="767.0" y="213" width="16.0" height="15.0" fill="rgb(232,108,36)" rx="2" ry="2" />
+<text  x="769.98" y="223.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="101" width="69.6" height="15.0" fill="rgb(230,72,2)" rx="2" ry="2" />
+<text  x="611.33" y="111.5" >module...</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="761.8" y="69" width="2.1" height="15.0" fill="rgb(225,116,29)" rx="2" ry="2" />
+<text  x="764.76" y="79.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (401,408 bytes, 0.36%)</title><rect x="1160.4" y="85" width="4.2" height="15.0" fill="rgb(236,93,48)" rx="2" ry="2" />
+<text  x="1163.39" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (1,605,632 bytes, 1.44%)</title><rect x="1167.7" y="165" width="17.1" height="15.0" fill="rgb(254,14,45)" rx="2" ry="2" />
+<text  x="1170.74" y="175.5" ></text>
+</g>
+<g >
+<title>resnet.py:273:_forward_impl (1,605,632 bytes, 1.44%)</title><rect x="677.9" y="181" width="17.1" height="15.0" fill="rgb(250,126,28)" rx="2" ry="2" />
+<text  x="680.93" y="191.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (401,408 bytes, 0.36%)</title><rect x="753.2" y="69" width="4.3" height="15.0" fill="rgb(212,152,38)" rx="2" ry="2" />
+<text  x="756.24" y="79.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (3,211,264 bytes, 2.89%)</title><rect x="44.1" y="149" width="34.1" height="15.0" fill="rgb(227,3,37)" rx="2" ry="2" />
+<text  x="47.09" y="159.5" >ba..</text>
+</g>
+<g >
+<title>resnet.py:96:forward (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="117" width="278.4" height="15.0" fill="rgb(241,100,21)" rx="2" ry="2" />
+<text  x="803.33" y="127.5" >resnet.py:96:forward</text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (802,816 bytes, 0.72%)</title><rect x="1176.3" y="69" width="8.5" height="15.0" fill="rgb(220,153,5)" rx="2" ry="2" />
+<text  x="1179.26" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="708.7" y="101" width="8.5" height="15.0" fill="rgb(224,209,44)" rx="2" ry="2" />
+<text  x="711.71" y="111.5" ></text>
+</g>
+<g >
+<title>&lt;gaps&gt; (1,044,480 bytes, 0.94%)</title><rect x="789.2" y="229" width="11.1" height="15.0" fill="rgb(252,17,49)" rx="2" ry="2" />
+<text  x="792.25" y="239.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (802,816 bytes, 0.72%)</title><rect x="767.0" y="149" width="8.5" height="15.0" fill="rgb(239,143,2)" rx="2" ry="2" />
+<text  x="769.98" y="159.5" ></text>
+</g>
+<g >
+<title>inactive (1,572,864 bytes, 1.42%)</title><rect x="215.9" y="245" width="16.7" height="15.0" fill="rgb(222,56,41)" rx="2" ry="2" />
+<text  x="218.94" y="255.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (200,704 bytes, 0.18%)</title><rect x="780.8" y="85" width="2.2" height="15.0" fill="rgb(243,137,43)" rx="2" ry="2" />
+<text  x="783.83" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1164.6" y="101" width="2.2" height="15.0" fill="rgb(227,49,40)" rx="2" ry="2" />
+<text  x="1167.65" y="111.5" ></text>
+</g>
+<g >
+<title>eg.py:8:&lt;module&gt; (1,756,992 bytes, 1.58%)</title><rect x="1104.6" y="229" width="18.6" height="15.0" fill="rgb(221,134,31)" rx="2" ry="2" />
+<text  x="1107.55" y="239.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (401,408 bytes, 0.36%)</title><rect x="749.0" y="117" width="4.2" height="15.0" fill="rgb(254,219,18)" rx="2" ry="2" />
+<text  x="751.98" y="127.5" ></text>
+</g>
+<g >
+<title>&lt;gaps&gt; (1,048,576 bytes, 0.94%)</title><rect x="1078.7" y="229" width="11.1" height="15.0" fill="rgb(227,41,45)" rx="2" ry="2" />
+<text  x="1081.68" y="239.5" ></text>
+</g>
+<g >
+<title>resnet.py:285:forward (2,007,040 bytes, 1.81%)</title><rect x="722.5" y="197" width="21.3" height="15.0" fill="rgb(224,41,39)" rx="2" ry="2" />
+<text  x="725.45" y="207.5" >r..</text>
+</g>
+<g >
+<title>container.py:204:forward (401,408 bytes, 0.36%)</title><rect x="1184.8" y="149" width="4.2" height="15.0" fill="rgb(215,16,9)" rx="2" ry="2" />
+<text  x="1187.78" y="159.5" ></text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (524,288 bytes, 0.47%)</title><rect x="1126.4" y="117" width="5.6" height="15.0" fill="rgb(224,167,47)" rx="2" ry="2" />
+<text  x="1129.40" y="127.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (802,816 bytes, 0.72%)</title><rect x="708.7" y="117" width="8.5" height="15.0" fill="rgb(216,9,23)" rx="2" ry="2" />
+<text  x="711.71" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (9,437,184 bytes, 8.49%)</title><rect x="472.3" y="165" width="100.2" height="15.0" fill="rgb(241,20,43)" rx="2" ry="2" />
+<text  x="475.33" y="175.5" >module.py:63..</text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (100,352 bytes, 0.09%)</title><rect x="777.6" y="69" width="1.1" height="15.0" fill="rgb(208,188,10)" rx="2" ry="2" />
+<text  x="780.63" y="79.5" ></text>
+</g>
+<g >
+<title>resnet.py:273:_forward_impl (1,605,632 bytes, 1.44%)</title><rect x="700.2" y="181" width="17.0" height="15.0" fill="rgb(205,33,34)" rx="2" ry="2" />
+<text  x="703.19" y="191.5" ></text>
+</g>
+<g >
+<title>pooling.py:166:forward (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="149" width="17.0" height="15.0" fill="rgb(218,212,50)" rx="2" ry="2" />
+<text  x="458.28" y="159.5" ></text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="181" width="69.6" height="15.0" fill="rgb(226,64,46)" rx="2" ry="2" />
+<text  x="611.33" y="191.5" >resnet...</text>
+</g>
+<g >
+<title>resnet.py:96:forward (200,704 bytes, 0.18%)</title><rect x="1123.2" y="117" width="2.1" height="15.0" fill="rgb(223,72,17)" rx="2" ry="2" />
+<text  x="1126.21" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="700.2" y="101" width="8.5" height="15.0" fill="rgb(217,216,50)" rx="2" ry="2" />
+<text  x="703.19" y="111.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="1125.3" y="101" width="1.1" height="15.0" fill="rgb(235,160,46)" rx="2" ry="2" />
+<text  x="1128.34" y="111.5" ></text>
+</g>
+<g >
+<title>resnet.py:93:forward (200,704 bytes, 0.18%)</title><rect x="769.1" y="117" width="2.1" height="15.0" fill="rgb(244,64,4)" rx="2" ry="2" />
+<text  x="772.11" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (1,703,936 bytes, 1.53%)</title><rect x="1126.4" y="181" width="18.1" height="15.0" fill="rgb(223,135,19)" rx="2" ry="2" />
+<text  x="1129.40" y="191.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (10,240 bytes, 0.01%)</title><rect x="699.3" y="149" width="0.1" height="15.0" fill="rgb(205,70,45)" rx="2" ry="2" />
+<text  x="702.29" y="159.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (2,007,040 bytes, 1.81%)</title><rect x="700.2" y="229" width="21.3" height="15.0" fill="rgb(248,211,41)" rx="2" ry="2" />
+<text  x="703.19" y="239.5" >e..</text>
+</g>
+<g >
+<title>resnet.py:92:forward (401,408 bytes, 0.36%)</title><rect x="695.0" y="117" width="4.2" height="15.0" fill="rgb(221,74,5)" rx="2" ry="2" />
+<text  x="697.98" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="731.0" y="101" width="8.5" height="15.0" fill="rgb(242,1,10)" rx="2" ry="2" />
+<text  x="733.98" y="111.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (1,048,576 bytes, 0.94%)</title><rect x="1089.8" y="229" width="11.1" height="15.0" fill="rgb(238,146,7)" rx="2" ry="2" />
+<text  x="1092.81" y="239.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="197" width="137.7" height="15.0" fill="rgb(233,227,3)" rx="2" ry="2" />
+<text  x="81.18" y="207.5" >module.py:634:_ap..</text>
+</g>
+<g >
+<title>resnet.py:285:forward (2,007,040 bytes, 1.81%)</title><rect x="1167.7" y="197" width="21.3" height="15.0" fill="rgb(208,69,10)" rx="2" ry="2" />
+<text  x="1170.74" y="207.5" >r..</text>
+</g>
+<g >
+<title>module.py:745:&lt;lambda&gt; (1,179,648 bytes, 1.06%)</title><rect x="1132.0" y="133" width="12.5" height="15.0" fill="rgb(242,220,32)" rx="2" ry="2" />
+<text  x="1134.97" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:745:cuda (1,756,992 bytes, 1.58%)</title><rect x="1104.6" y="213" width="18.6" height="15.0" fill="rgb(218,193,10)" rx="2" ry="2" />
+<text  x="1107.55" y="223.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (401,408 bytes, 0.36%)</title><rect x="717.2" y="85" width="4.3" height="15.0" fill="rgb(217,159,40)" rx="2" ry="2" />
+<text  x="720.23" y="95.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (2,007,040 bytes, 1.81%)</title><rect x="744.7" y="229" width="21.3" height="15.0" fill="rgb(208,64,31)" rx="2" ry="2" />
+<text  x="747.72" y="239.5" >e..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="101" width="278.4" height="15.0" fill="rgb(211,110,23)" rx="2" ry="2" />
+<text  x="803.33" y="111.5" >module.py:1186:_call_impl</text>
+</g>
+<g >
+<title>resnet.py:269:_forward_impl (3,211,264 bytes, 2.89%)</title><rect x="44.1" y="181" width="34.1" height="15.0" fill="rgb(217,175,10)" rx="2" ry="2" />
+<text  x="47.09" y="191.5" >re..</text>
+</g>
+<g >
+<title>conv.py:463:forward (3,211,264 bytes, 2.89%)</title><rect x="10.0" y="149" width="34.1" height="15.0" fill="rgb(211,98,52)" rx="2" ry="2" />
+<text  x="13.00" y="159.5" >co..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="1164.6" y="133" width="2.2" height="15.0" fill="rgb(238,207,5)" rx="2" ry="2" />
+<text  x="1167.65" y="143.5" ></text>
+</g>
+<g >
+<title>batchnorm.py:170:forward (802,816 bytes, 0.72%)</title><rect x="686.4" y="85" width="8.6" height="15.0" fill="rgb(216,22,2)" rx="2" ry="2" />
+<text  x="689.45" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (10,240 bytes, 0.01%)</title><rect x="699.3" y="133" width="0.1" height="15.0" fill="rgb(242,107,9)" rx="2" ry="2" />
+<text  x="702.29" y="143.5" ></text>
+</g>
+<g >
+<title>resnet.py:97:forward (200,704 bytes, 0.18%)</title><rect x="763.9" y="117" width="2.1" height="15.0" fill="rgb(246,110,1)" rx="2" ry="2" />
+<text  x="766.89" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="717.2" y="165" width="4.3" height="15.0" fill="rgb(230,167,43)" rx="2" ry="2" />
+<text  x="720.23" y="175.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (20,922,368 bytes, 18.82%)</title><rect x="233.2" y="197" width="222.1" height="15.0" fill="rgb(242,148,28)" rx="2" ry="2" />
+<text  x="236.16" y="207.5" >module.py:634:_apply</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1184.8" y="133" width="4.2" height="15.0" fill="rgb(254,166,35)" rx="2" ry="2" />
+<text  x="1187.78" y="143.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (3,211,264 bytes, 2.89%)</title><rect x="10.0" y="133" width="34.1" height="15.0" fill="rgb(226,28,0)" rx="2" ry="2" />
+<text  x="13.00" y="143.5" >co..</text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="229" width="69.6" height="15.0" fill="rgb(254,194,26)" rx="2" ry="2" />
+<text  x="611.33" y="239.5" >eg.py:1..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (802,816 bytes, 0.72%)</title><rect x="1167.7" y="101" width="8.6" height="15.0" fill="rgb(230,13,9)" rx="2" ry="2" />
+<text  x="1170.74" y="111.5" ></text>
+</g>
+<g >
+<title>active_allocated (2,007,040 bytes, 1.81%)</title><rect x="700.2" y="245" width="21.3" height="15.0" fill="rgb(221,45,39)" rx="2" ry="2" />
+<text  x="703.19" y="255.5" >a..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (200,704 bytes, 0.18%)</title><rect x="767.0" y="101" width="2.1" height="15.0" fill="rgb(248,99,40)" rx="2" ry="2" />
+<text  x="769.98" y="111.5" ></text>
+</g>
+<g >
+<title>seg_140208544677888 (2,097,152 bytes, 1.89%)</title><rect x="722.5" y="261" width="22.2" height="15.0" fill="rgb(208,0,21)" rx="2" ry="2" />
+<text  x="725.45" y="271.5" >s..</text>
+</g>
+<g >
+<title>container.py:204:forward (118,784 bytes, 0.11%)</title><rect x="1103.3" y="149" width="1.3" height="15.0" fill="rgb(215,71,1)" rx="2" ry="2" />
+<text  x="1106.29" y="159.5" ></text>
+</g>
+<g >
+<title>seg_140208490151936 (20,971,520 bytes, 18.87%)</title><rect x="232.6" y="261" width="222.7" height="15.0" fill="rgb(254,168,40)" rx="2" ry="2" />
+<text  x="235.64" y="271.5" >seg_140208490151936</text>
+</g>
+<g >
+<title>conv.py:463:forward (1,181,952 bytes, 1.06%)</title><rect x="220.1" y="85" width="12.5" height="15.0" fill="rgb(228,3,0)" rx="2" ry="2" />
+<text  x="223.09" y="95.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="181" width="137.7" height="15.0" fill="rgb(235,118,30)" rx="2" ry="2" />
+<text  x="81.18" y="191.5" >module.py:634:_ap..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="739.5" y="101" width="4.3" height="15.0" fill="rgb(236,89,15)" rx="2" ry="2" />
+<text  x="742.50" y="111.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="1160.4" y="133" width="4.2" height="15.0" fill="rgb(220,210,23)" rx="2" ry="2" />
+<text  x="1163.39" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="213" width="69.6" height="15.0" fill="rgb(253,32,40)" rx="2" ry="2" />
+<text  x="611.33" y="223.5" >module...</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (10,240 bytes, 0.01%)</title><rect x="699.3" y="165" width="0.1" height="15.0" fill="rgb(230,36,20)" rx="2" ry="2" />
+<text  x="702.29" y="175.5" ></text>
+</g>
+<g >
+<title>eg.py:8:&lt;module&gt; (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="229" width="137.7" height="15.0" fill="rgb(226,142,35)" rx="2" ry="2" />
+<text  x="81.18" y="239.5" >eg.py:8:&lt;module&gt;</text>
+</g>
+<g >
+<title>resnet.py:97:forward (802,816 bytes, 0.72%)</title><rect x="686.4" y="117" width="8.6" height="15.0" fill="rgb(243,165,21)" rx="2" ry="2" />
+<text  x="689.45" y="127.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (200,704 bytes, 0.18%)</title><rect x="761.8" y="37" width="2.1" height="15.0" fill="rgb(211,61,38)" rx="2" ry="2" />
+<text  x="764.76" y="47.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (6,555,648 bytes, 5.90%)</title><rect x="608.3" y="133" width="69.6" height="15.0" fill="rgb(218,89,54)" rx="2" ry="2" />
+<text  x="611.33" y="143.5" >module...</text>
+</g>
+<g >
+<title>conv.py:463:forward (200,704 bytes, 0.18%)</title><rect x="1164.6" y="85" width="2.2" height="15.0" fill="rgb(205,220,30)" rx="2" ry="2" />
+<text  x="1167.65" y="95.5" ></text>
+</g>
+<g >
+<title>seg_140208469180416 (20,971,520 bytes, 18.87%)</title><rect x="10.0" y="261" width="222.6" height="15.0" fill="rgb(232,132,17)" rx="2" ry="2" />
+<text  x="13.00" y="271.5" >seg_140208469180416</text>
+</g>
+<g >
+<title>resnet.py:96:forward (401,408 bytes, 0.36%)</title><rect x="753.2" y="117" width="4.3" height="15.0" fill="rgb(226,166,43)" rx="2" ry="2" />
+<text  x="756.24" y="127.5" ></text>
+</g>
+<g >
+<title>module.py:634:_apply (12,976,128 bytes, 11.67%)</title><rect x="78.2" y="165" width="137.7" height="15.0" fill="rgb(232,75,14)" rx="2" ry="2" />
+<text  x="81.18" y="175.5" >module.py:634:_ap..</text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (200,704 bytes, 0.18%)</title><rect x="778.7" y="69" width="2.1" height="15.0" fill="rgb(250,223,28)" rx="2" ry="2" />
+<text  x="781.70" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (2,007,040 bytes, 1.81%)</title><rect x="744.7" y="213" width="21.3" height="15.0" fill="rgb(218,61,16)" rx="2" ry="2" />
+<text  x="747.72" y="223.5" >m..</text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (3,211,264 bytes, 2.89%)</title><rect x="10.0" y="165" width="34.1" height="15.0" fill="rgb(241,99,11)" rx="2" ry="2" />
+<text  x="13.00" y="175.5" >mo..</text>
+</g>
+<g >
+<title>module.py:634:_apply (1,756,992 bytes, 1.58%)</title><rect x="1104.6" y="197" width="18.6" height="15.0" fill="rgb(251,154,38)" rx="2" ry="2" />
+<text  x="1107.55" y="207.5" ></text>
+</g>
+<g >
+<title>resnet.py:100:forward (401,408 bytes, 0.36%)</title><rect x="1160.4" y="117" width="4.2" height="15.0" fill="rgb(231,58,38)" rx="2" ry="2" />
+<text  x="1163.39" y="127.5" ></text>
+</g>
+<g >
+<title>conv.py:459:_conv_forward (200,704 bytes, 0.18%)</title><rect x="1123.2" y="69" width="2.1" height="15.0" fill="rgb(206,214,38)" rx="2" ry="2" />
+<text  x="1126.21" y="79.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (100,352 bytes, 0.09%)</title><rect x="1125.3" y="165" width="1.1" height="15.0" fill="rgb(241,88,42)" rx="2" ry="2" />
+<text  x="1128.34" y="175.5" ></text>
+</g>
+<g >
+<title>eg.py:8:&lt;module&gt; (1,703,936 bytes, 1.53%)</title><rect x="1126.4" y="229" width="18.1" height="15.0" fill="rgb(230,206,48)" rx="2" ry="2" />
+<text  x="1129.40" y="239.5" ></text>
+</g>
+<g >
+<title>inactive (591,872 bytes, 0.53%)</title><rect x="783.0" y="245" width="6.2" height="15.0" fill="rgb(234,219,15)" rx="2" ry="2" />
+<text  x="785.96" y="255.5" ></text>
+</g>
+<g >
+<title>resnet.py:276:_forward_impl (100,352 bytes, 0.09%)</title><rect x="1125.3" y="181" width="1.1" height="15.0" fill="rgb(220,1,4)" rx="2" ry="2" />
+<text  x="1128.34" y="191.5" ></text>
+</g>
+<g >
+<title>eg.py:11:&lt;module&gt; (2,007,040 bytes, 1.81%)</title><rect x="722.5" y="229" width="21.3" height="15.0" fill="rgb(230,3,1)" rx="2" ry="2" />
+<text  x="725.45" y="239.5" >e..</text>
+</g>
+<g >
+<title>inactive (90,112 bytes, 0.08%)</title><rect x="1189.0" y="245" width="1.0" height="15.0" fill="rgb(247,225,46)" rx="2" ry="2" />
+<text  x="1192.04" y="255.5" ></text>
+</g>
+<g >
+<title>functional.py:2444:batch_norm (200,704 bytes, 0.18%)</title><rect x="763.9" y="69" width="2.1" height="15.0" fill="rgb(239,5,12)" rx="2" ry="2" />
+<text  x="766.89" y="79.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (200,704 bytes, 0.18%)</title><rect x="1123.2" y="149" width="2.1" height="15.0" fill="rgb(225,0,41)" rx="2" ry="2" />
+<text  x="1126.21" y="159.5" ></text>
+</g>
+<g >
+<title>_jit_internal.py:485:fn (1,605,632 bytes, 1.44%)</title><rect x="455.3" y="133" width="17.0" height="15.0" fill="rgb(245,38,29)" rx="2" ry="2" />
+<text  x="458.28" y="143.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (118,784 bytes, 0.11%)</title><rect x="1103.3" y="133" width="1.3" height="15.0" fill="rgb(243,95,42)" rx="2" ry="2" />
+<text  x="1106.29" y="143.5" ></text>
+</g>
+<g >
+<title>container.py:204:forward (26,218,496 bytes, 23.59%)</title><rect x="800.3" y="149" width="278.4" height="15.0" fill="rgb(225,81,18)" rx="2" ry="2" />
+<text  x="803.33" y="159.5" >container.py:204:forward</text>
+</g>
+<g >
+<title>resnet.py:285:forward (2,030,496 bytes, 1.83%)</title><rect x="677.9" y="197" width="21.6" height="15.0" fill="rgb(244,166,24)" rx="2" ry="2" />
+<text  x="680.93" y="207.5" >r..</text>
+</g>
+<g >
+<title>resnet.py:275:_forward_impl (200,704 bytes, 0.18%)</title><rect x="1164.6" y="181" width="2.2" height="15.0" fill="rgb(232,225,35)" rx="2" ry="2" />
+<text  x="1167.65" y="191.5" ></text>
+</g>
+<g >
+<title>module.py:1186:_call_impl (401,408 bytes, 0.36%)</title><rect x="717.2" y="133" width="4.3" height="15.0" fill="rgb(237,149,12)" rx="2" ry="2" />
+<text  x="720.23" y="143.5" ></text>
+</g>
+</g>
+</svg>
