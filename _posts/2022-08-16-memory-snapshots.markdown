@@ -157,6 +157,27 @@ The comparison view shows just the new segments, which can help figure out what 
 
 [![compare memory](/assets/compare.svg)](/assets/compare.svg)
 
+Custom analysis
+---------------
+
+If these vizualizations are not sufficient, the snapshot format, and `_memory_viz.py` are simple enough that they can be modified to produce custom views, filter out out noise like small allocations, or calculate other aggregate statistics.
+
+
+Generating Snapshots when Out of Memory
+---------------------------------------
+When debugging how your program runs out of memory, one helpful time to generate a snapshot is during an OutOfMemory exception itself, we can do that today by monkey patching code like so:
+
+    def oom_init(self, *args, **kwargs):
+        super(torch.cuda.OutOfMemoryError, self).__init__(*args, **kwargs)
+        # snapshot right after an OOM happened
+        print('saving allocated state during OOM')
+        snapshot = torch.cuda.memory._snapshot()
+        dump(snapshot, open('oom_snapshot.pickle', 'wb'))
+
+    torch.cuda.OutOfMemoryError.__init__ = oom_init
+
+Whenever an OutOfMemoryError is created, we will produce a dump of the state of the allocator.
+
 
 Understanding terminology
 -------------------------
