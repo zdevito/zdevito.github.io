@@ -8,13 +8,13 @@ categories: ""
 A guide to PyTorch's CUDA Caching Allocator
 ===========================================
 
-The goal of the CUDA caching allocator in PyTorch is to reach a steady state where the program runs without needing to request new memory from CUDA using `cudaMalloc` and `cudaFree`. PyTorch relies on the CPU execution running ahead of GPU execution to hide the latency of the Python interpreter behind the more expensive CUDA operation. But these memory APIs, especially cudaFree, introduce synchronization which interfere with this process.
+The goal of the CUDA caching allocator in PyTorch is to reach a steady state where the program runs without needing to request new memory from CUDA using `cudaMalloc` and `cudaFree`. PyTorch relies on the CPU execution running ahead of GPU execution to hide the latency of the Python interpreter behind the more expensive CUDA operations. But these memory APIs, especially cudaFree, introduce synchronization which interfere with this process.
 
 To accomplish its goal, the caching allocator requests blocks of memory from CUDA and figures out ways to split up and reuse these blocks without returning them to CUDA.
 
-Why not just request all GPU memory and manage it inside PyTorch? PyTorch is not the only library to use the CUDA APIs. Many programs will use cuBlas, cuDNN, and NCCL all of which do some allocations on their own, and users might mix PyTorch with other CUDA-accelerated libraries we do not know about. Instead, if PyTorch ever uses N bytes of memory at one point, we will continue to to keep that much memory cached until a user specifically frees it via `torch.cuda.memory.empty_cache()`.
+Why not just request all GPU memory and manage it inside PyTorch? PyTorch is not the only library to use the CUDA APIs. Many programs will use cuBlas, cuDNN, and NCCL all of which do some allocations on their own, and users might mix PyTorch with other CUDA-accelerated libraries we do not know about. Instead, if PyTorch ever uses N bytes of memory at one point, we will continue to to keep that N bytes cached until a user specifically frees it via `torch.cuda.memory.empty_cache()`.
 
-Under normal circumstances, the allocator achieves these goals and mostly lives in the background. But sometimes a particular set of adversarial allocations might prevent it from reaching a steady state. Or maybe a program runs out of memory for good reasons but it is hard read the statistics. In these cases, it is helpful to understand more about what the allocator is doing to debug the issue.
+Under normal circumstances, the allocator achieves these goals and mostly lives in the background. But sometimes a particular set of adversarial allocations might prevent it from reaching a steady state. Or maybe a program runs out of memory for good reasons but it is hard to read the statistics. In these cases, it is helpful to understand more about what the allocator is doing to debug the issue.
 
 This document gives an overview with pseudocode for how the allocator behaves as of August 2022.
 
@@ -76,14 +76,14 @@ Each allocation is rounded up to make it less likely to end up with fragmentatio
         }
     }
 
-The environment variable `CUDA_PYTORCH_CUDA_ALLOC_CONF=roundup_power2_divisions:N` makes the round more aggressive to try to avoid situations where small changes in batch size or sequence length will cause different-sized allocations each time, making it harder to reach a steady state. Some memory is lost to this rounding (N=1 will on average waste 1/4th of each allocation but N=2 will only waste 1/8th). Since many models do not use varying sizes, it is disabled by default.
+The environment variable `CUDA_PYTORCH_CUDA_ALLOC_CONF=roundup_power2_divisions:N` makes the rounding more aggressive to try to avoid situations where small changes in batch size or sequence length will cause different-sized allocations each time, making it harder to reach a steady state. Some memory is lost to this rounding (N=1 will on average waste 1/4th of each allocation but N=2 will only waste 1/8th). Since many models do not use varying sizes, it is disabled by default.
 
 
 
 Asking CUDA For More Memory
 ---------------------------
 
-A second set of rounding rules applying when we need more memory from CUDA. In this circumstance, we only ask CUDA for a multiple of its page size (2MB?) at the smallest, expecting to split the block up for smaller allocations. For large sizes this rounding happens in 20MB chunks:
+A second set of rounding rules applying when we need more memory from CUDA. In this circumstance, we only ask CUDA for a multiple of 2MB at its smallest, expecting to split the block up for smaller allocations. For large sizes this rounding happens in 20MB chunks:
 
     Block alloc_new_block(size_t size) {
         // when we allocate a new block, we allocate it bigger than the requested object
