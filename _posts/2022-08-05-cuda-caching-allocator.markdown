@@ -83,7 +83,7 @@ The environment variable `CUDA_PYTORCH_CUDA_ALLOC_CONF=roundup_power2_divisions:
 Asking CUDA For More Memory
 ---------------------------
 
-A second set of rounding rules applying when we need more memory from CUDA. In this circumstance, we only ask CUDA for a multiple of 2MB at its smallest, expecting to split the block up for smaller allocations. For large sizes this rounding happens in 20MB chunks:
+A second set of rounding rules applying when we need more memory from CUDA. In this circumstance, we only ask CUDA for a multiple of 2MB at its smallest, expecting to split the block up for smaller allocations. For large sizes this rounding happens in 2MB chunks:
 
     Block alloc_new_block(size_t size) {
         // when we allocate a new block, we allocate it bigger than the requested object
@@ -93,7 +93,7 @@ A second set of rounding rules applying when we need more memory from CUDA. In t
         } else if (size < 10MB) {
             allocation_size = 20MB
         } else {
-            allocation_size = <size rounded a multiple of 20MB>
+            allocation_size = <size rounded a multiple of 2MB>
         }
         memory = cudaMalloc(allocation_size)
         if (<cuda is out of memory>) {
