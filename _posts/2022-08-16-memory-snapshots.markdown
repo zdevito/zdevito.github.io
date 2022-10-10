@@ -8,7 +8,7 @@ categories: ""
 Debugging PyTorch memory use with snapshots
 ===========================================
 
-In a [previous post](), I gave a detailed guide about how PyTorch CUDA caching allocator hands out memory. To understand how it is working with your own training run or application, we also have developed new tools to visualize the state of allocated memory by generating and visualzing _memory snapshots_. These snapshots record the stack traces where memory was allocated and where it lives inside the state of the caching allocator. By visualizing these snapshots as [flamegraphs](https://www.brendangregg.com/flamegraphs.html), it can show where memory is being used at glance.
+In a [previous post](https://zdevito.github.io/2022/08/04/cuda-caching-allocator.html), I gave a detailed guide about how PyTorch CUDA caching allocator hands out memory. To understand how it is working with your own training run or application, we also have developed new tools to visualize the state of allocated memory by generating and visualzing _memory snapshots_. These snapshots record the stack traces where memory was allocated and where it lives inside the state of the caching allocator. By visualizing these snapshots as [flamegraphs](https://www.brendangregg.com/flamegraphs.html), it can show where memory is being used at glance.
 
 
 Generating snapshots
@@ -28,8 +28,8 @@ Recording these stack traces is pretty fast (~1us per allocation, a normal PyTor
     input = torch.rand(1, 3, 224, 224)
     model.train()
     output = model(input)
-    snapshot = torch.cuda.memory_snapshot()
-    pprint(snapshot)
+    snapshot = torch.cuda.memory._snapshot()
+    pprint(snapshot['segments'])
 
 The snapshot records the entire allocator state and looks like:
 
@@ -87,7 +87,10 @@ The snapshot is a list of `Segment` dictionaries with this structure:
         line: int
         name: str
 
-    snapshot : List[Segment] = torch.cuda.memory_snapshot()
+    class Snapshot(TypedDict):
+        segments : List[Segment]
+
+    snapshot : Snapshot = torch.cuda.memory._snapshot()
 
 
 `Segment`s are the memory directly requested from cudaMalloc and cached by the allocator. Because we might only be using part of one of these segments, the caching allocator splits these up into one or more `Block`s. All of a block is always in the same allocation state. With `_record_memory_history` each block will also record a `History` object that remembers the last allocation placed in that block, including its stack trace as a list of `Frame`s. For `active_allocated` blocks there will be a single history for what exists in the block and is currently allocated. For `inactive` blocks, there may be multiple entries that record the last things that lived in the memory of block. The reason there might be more than one is because the allocator will merge split blocks when they become free, and it records the history of both splits. To avoid recording a huge amount of history, we only keep history for ranges of the block that do not overlap with anything newer.
@@ -139,7 +142,7 @@ The visualizer can also generate a visualization that shows the segments that ha
 
     input8 = torch.rand(8, 3, 224, 224, device='cuda')
     output = model(input8)
-    snapshot = torch.cuda.memory_snapshot()
+    snapshot = torch.cuda.memory._snapshot()
     dump(snapshot, open('snapshot2.pickle', 'wb'))
 
 ---

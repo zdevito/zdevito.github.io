@@ -8,7 +8,7 @@ categories: ""
 A guide to PyTorch's CUDA Caching Allocator
 ===========================================
 
-The goal of the CUDA caching allocator in PyTorch is to reach a steady state where the program runs without needing to request new memory from CUDA using `cudaMalloc` and `cudaFree`. PyTorch relies on the CPU execution running ahead of GPU execution to hide the latency of the Python interpreter behind the more expensive CUDA operations. But these memory APIs, especially cudaFree, introduce synchronization which interfere with this process.
+The goal of the CUDA caching allocator in PyTorch is to reach a steady state where the program runs without needing to request new memory from CUDA using `cudaMalloc` and `cudaFree`. PyTorch relies on the CPU execution running ahead of GPU execution to hide the latency of the Python interpreter behind the more time-consuming CUDA operations. But these memory APIs, especially cudaFree, introduce synchronization which interfere with this process.
 
 To accomplish its goal, the caching allocator requests blocks of memory from CUDA and figures out ways to split up and reuse these blocks without returning them to CUDA.
 
@@ -41,7 +41,7 @@ At a high level, we try to find a free block from this pool, but ask CUDA for mo
     Block malloc(int device, size_t size, cudaStream_t stream) {
 
         process_cross_stream_delayed_free()
-        size = round_size(size); 
+        size = round_size(size);
         pool = size < 1MB ? small_pool : large_pool;
 
         Block block = <find and remove the smallest block in the pool on the same stream that is big enough to fit size>
@@ -179,7 +179,7 @@ The final piece of the allocator is how to recover during an OOM. This is referr
         <for all free blocks in our reserved memory, cudaFree them>
     }
 
-Since `cudaFree` synchronizes the device, this process is very expensive, so we use this time to also free any of the cross stream blocks we were waiting for as well.
+Since `cudaFree` synchronizes the device, this process is inefficient, so we use this time to also free any of the cross stream blocks we were waiting for as well.
 
 
 At this point if we are out of memory, we raise an `OutOfMemoryError` exception (the OOM statistic). Under some circumstance, it might be the case that there is enough memory in the system to continue but we cannot free it. For instance, if there is a small tensor allocated in a big block of memory, we cannot free that block, wasting the rest of the block.
