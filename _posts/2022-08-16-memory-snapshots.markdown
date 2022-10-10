@@ -124,7 +124,7 @@ This produces a visualization that segements all the bytes in the allocator in d
 
 Flamegraphs visualizations are a way breaking down how a resource (such as memory) is used into different categories that can then be further broken down into even more finegrained categories.
 
-The size of segments along the x-axis corresponds to the number of bytes in that segment, while the depth along the y-axis shows the different categories into which we are classifying how the memory is used. Everything in the tower above the `active_allocated` category on the left is currently allocated, while the tower above the `inactive` category holds the memory that is cached in the allocator by not in use. Above these broad categories we further categorize how the memory is used by the stack frames active when it was allocated. In this visualization we can see one stack pattern with lots of `_apply` frames that holds the model parameters (which were created in the `.cuda()` which calls `_apply`). The other stack pattern in the `active_allocated` class includes `resnet.py:285:forward` and represents the activations saved for the backward pass. Another similar tower exists in the `inactive` category with the blocks that were used for temporaries in the foward pass.
+The size of segments along the x-axis corresponds to the number of bytes in that segment, while the depth along the y-axis shows the different categories into which we are classifying how the memory is used. Everything in the tower above the `active_allocated` category on the left is currently allocated, while the tower above the `inactive` category holds the memory that is cached in the allocator by not in use. Above these broad categories we further categorize how the memory is used by the stack frames active when it was allocated. In this visualization we can see one stack pattern with lots of `_apply` frames that holds the model parameters (which were created in `.cuda()` which calls `_apply`). The other stack pattern in the `active_allocated` class includes `resnet.py:285:forward` and represents the activations saved for the backward pass. Another similar tower exists in the `inactive` category with the blocks that were used for temporaries in the foward pass.
 
 The `memory` view gives a good overview of how the memory is being used. For debugging allocator issues in particular, though, it is useful to first categorized memory into individual `Segment` objects, which are the invidual `cudaMalloc` segments that allocated tracks:
 
@@ -168,18 +168,17 @@ If these vizualizations are not sufficient, the snapshot format, and `_memory_vi
 
 Generating Snapshots when Out of Memory
 ---------------------------------------
-When debugging how your program runs out of memory, one helpful time to generate a snapshot is during an OutOfMemory exception itself, we can do that today by monkey patching code like so:
+When debugging how your program runs out of memory, one helpful time to generate a snapshot is during an OutOfMemory exception itself, we can do that today by registering an observer with the allocator that will be called everytime it is about to raise an OutOfMemoryError before any memory has been release while unwinding the exception:
 
-    def oom_init(self, *args, **kwargs):
-        super(torch.cuda.OutOfMemoryError, self).__init__(*args, **kwargs)
+    def oom_observer(device, alloc, device_alloc, device_free):
         # snapshot right after an OOM happened
         print('saving allocated state during OOM')
         snapshot = torch.cuda.memory._snapshot()
         dump(snapshot, open('oom_snapshot.pickle', 'wb'))
 
-    torch.cuda.OutOfMemoryError.__init__ = oom_init
+    torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
-Whenever an OutOfMemoryError is created, we will produce a dump of the state of the allocator.
+When running out of memory, this function may be called multiple times. This is because some ops, convolution in particular, use scratch spaces to speed up execution and can recover from an OOM error by using an implementation with a smaller footprint.
 
 
 Understanding terminology
