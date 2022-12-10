@@ -24,8 +24,8 @@ Recording these stack traces is pretty fast (~1us per allocation, a normal PyTor
     from torchvision.models import resnet18
     from pprint import pprint
 
-    model = resnet18(device='cuda')
-    input = torch.rand(1, 3, 224, 224)
+    model = resnet18().cuda()
+    input = torch.rand(1, 3, 224, 224).cuda()
     model.train()
     output = model(input)
     snapshot = torch.cuda.memory._snapshot()

@@ -1,0 +1,314 @@
+
+<!DOCTYPE html>
+<html>
+<head></head>
+<body>
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7.7.0/+esm";
+import {schemeTableau10} from "https://cdn.skypack.dev/d3-scale-chromatic@3";
+import {axisLeft} from "https://cdn.skypack.dev/d3-axis@3";
+import {scaleLinear} from "https://cdn.skypack.dev/d3-scale@4";
+import {zoom, zoomIdentity} from "https://cdn.skypack.dev/d3-zoom@3";
+import {brushX} from "https://cdn.skypack.dev/d3-brush@3";
+
+let alloc_data = {"actions": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 125, 126, 127, 128, 129, 130, 131, 132, 132, 133, 134, 135, 136, 137, 137, 138, 139, 140, 141, 142, 142, 143, 144, 145, 146, 147, 147, 148, 149, 150, 151, 152, 152, 153, 154, 155, 156, 157, 157, 158, 159, 160, 161, 162, 162, 163, 164, 165, 163, 166, 167, 167, 168, 169, 170, 171, 172, 172, 173, 174, 175, 176, 177, 177, 178, 179, 180, 181, 182, 182, 183, 184, 185, 186, 187, 187, 188, 189, 190, 188, 191, 192, 192, 193, 194, 195, 196, 197, 197, 198, 199, 200, 201, 202, 202, 203, 204, 205, 206, 207, 207, 208, 209, 210, 211, 212, 212, 213, 214, 215, 213, 216, 217, 217, 218, 219, 220, 221, 222, 222, 223, 224, 225, 226, 227, 228, 229, 228, 230, 231, 232, 233, 234, 232, 235, 234, 230, 236, 237, 238, 239, 235, 226, 240, 236, 241, 240, 223, 242, 243, 244, 221, 224, 225, 245, 246, 246, 247, 248, 248, 242, 249, 245, 218, 250, 251, 252, 249, 216, 219, 220, 253, 254, 254, 255, 256, 256, 250, 257, 241, 253, 258, 257, 208, 259, 260, 261, 211, 214, 215, 262, 263, 264, 264, 259, 265, 266, 267, 258, 206, 209, 210, 268, 269, 269, 270, 271, 271, 265, 272, 268, 203, 273, 274, 275, 272, 201, 204, 205, 276, 277, 278, 278, 273, 279, 262, 276, 280, 279, 198, 281, 282, 283, 196, 199, 200, 284, 285, 285, 286, 287, 287, 281, 288, 284, 193, 289, 290, 291, 288, 191, 194, 195, 292, 293, 293, 294, 295, 295, 289, 296, 280, 292, 297, 296, 183, 298, 299, 300, 186, 189, 190, 301, 302, 298, 303, 304, 305, 297, 181, 184, 185, 306, 307, 307, 308, 309, 309, 303, 310, 306, 178, 311, 312, 313, 310, 176, 179, 180, 314, 315, 316, 316, 311, 317, 301, 314, 318, 317, 173, 319, 320, 321, 171, 174, 175, 322, 323, 323, 324, 325, 325, 319, 326, 322, 168, 327, 328, 329, 326, 166, 169, 170, 330, 331, 331, 332, 333, 333, 327, 334, 318, 330, 335, 334, 158, 336, 337, 338, 161, 164, 165, 339, 340, 336, 341, 342, 343, 335, 156, 159, 160, 344, 345, 345, 346, 347, 347, 341, 348, 344, 153, 349, 350, 351, 348, 151, 154, 155, 352, 353, 354, 354, 349, 355, 339, 352, 356, 355, 148, 357, 358, 359, 146, 149, 150, 360, 361, 361, 362, 363, 363, 357, 364, 360, 143, 365, 366, 367, 364, 141, 144, 145, 368, 369, 369, 370, 371, 371, 365, 372, 356, 368, 373, 372, 138, 374, 375, 376, 136, 139, 140, 377, 378, 378, 379, 380, 380, 374, 381, 377, 133, 382, 383, 384, 381, 131, 134, 135, 385, 386, 386, 387, 388, 388, 382, 129, 389, 373, 385, 390, 389, 130, 391, 390, 126, 392, 393, 394, 391, 124, 127, 128, 395, 392, 233, 396, 397, 398, 399, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457], "elements_size": [37632, 256, 256, 256, 256, 8, 147456, 256, 256, 256, 256, 8, 147456, 256, 256, 256, 256, 8, 147456, 256, 256, 256, 256, 8, 147456, 256, 256, 256, 256, 8, 294912, 512, 512, 512, 512, 8, 589824, 512, 512, 512, 512, 8, 32768, 512, 512, 512, 512, 8, 589824, 512, 512, 512, 512, 8, 589824, 512, 512, 512, 512, 8, 1179648, 1024, 1024, 1024, 1024, 8, 2359296, 1024, 1024, 1024, 1024, 8, 131072, 1024, 1024, 1024, 1024, 8, 2359296, 1024, 1024, 1024, 1024, 8, 2359296, 1024, 1024, 1024, 1024, 8, 4718592, 2048, 2048, 2048, 2048, 8, 9437184, 2048, 2048, 2048, 2048, 8, 524288, 2048, 2048, 2048, 2048, 8, 9437184, 2048, 2048, 2048, 2048, 8, 9437184, 2048, 2048, 2048, 2048, 8, 2048000, 4000, 4816896, 64, 25690112, 114048, 25690112, 256, 256, 6422528, 12845056, 6422528, 410880, 6422528, 256, 256, 6422528, 410880, 6422528, 256, 256, 6422528, 410880, 6422528, 256, 256, 6422528, 410880, 6422528, 256, 256, 3211264, 300672, 3211264, 512, 512, 3211264, 1639936, 3211264, 512, 512, 3211264, 38528, 3211264, 512, 512, 3211264, 1639936, 3211264, 512, 512, 3211264, 1639936, 3211264, 512, 512, 1605632, 1181952, 1605632, 1024, 1024, 1605632, 6555648, 1605632, 1024, 1024, 1605632, 133376, 1605632, 1024, 1024, 1605632, 6555648, 1605632, 1024, 1024, 1605632, 6555648, 1605632, 1024, 1024, 802816, 4721024, 802816, 2048, 2048, 802816, 26218496, 802816, 2048, 2048, 802816, 526720, 802816, 2048, 2048, 802816, 26218496, 802816, 2048, 2048, 802816, 26218496, 802816, 2048, 2048, 16384, 32000, 1048576, 4194304, 32000, 4, 4, 4, 32000, 32000, 16384, 4194304, 2048000, 4000, 802816, 802816, 802816, 2048, 2048, 802816, 26216448, 9437184, 42467328, 802816, 802816, 2048, 2048, 802816, 26216448, 9437184, 42467328, 802816, 802816, 802816, 2048, 2048, 1605632, 524288, 526692, 802816, 2048, 2048, 802816, 26216448, 9437184, 42467328, 802816, 802816, 2048, 2048, 1605632, 4718592, 4741940, 1605632, 1605632, 1605632, 1024, 1024, 1605632, 6554624, 2359296, 18874368, 1605632, 1605632, 1024, 1024, 1605632, 6554624, 2359296, 18874368, 1605632, 1605632, 1605632, 1024, 1024, 3211264, 131072, 1605632, 1024, 1024, 1605632, 6554624, 2359296, 18874368, 1605632, 1605632, 1024, 1024, 3211264, 1179648, 1185272, 3211264, 3211264, 3211264, 512, 512, 3211264, 1638912, 589824, 16809984, 3211264, 3211264, 512, 512, 3211264, 1638912, 589824, 16809984, 3211264, 3211264, 3211264, 512, 512, 6422528, 32768, 3211264, 512, 512, 3211264, 1638912, 589824, 16809984, 3211264, 3211264, 512, 512, 6422528, 294912, 299504, 6422528, 6422528, 6422528, 256, 256, 6422528, 409856, 147456, 29491200, 6422528, 6422528, 256, 256, 6422528, 409856, 147456, 29491200, 6422528, 6422528, 6422528, 256, 256, 6422528, 409856, 147456, 29491200, 6422528, 6422528, 256, 256, 6422528, 409856, 147456, 29491200, 6422528, 25690112, 25690112, 25690112, 256, 256, 37632, 37632, 256, 256, 147456, 256, 256, 147456, 256, 256, 147456, 256, 256, 147456, 256, 256, 294912, 512, 512, 589824, 512, 512, 32768, 512, 512, 589824, 512, 512, 589824, 512, 512, 1179648, 1024, 1024, 2359296, 1024, 1024, 131072, 1024, 1024, 2359296, 1024, 1024, 2359296, 1024, 1024, 4718592, 2048, 2048, 9437184, 2048, 2048, 524288, 2048, 2048, 9437184, 2048, 2048, 9437184, 2048, 2048, 2048000, 4000], "elements_info": [5, 6, 6, 9, 9, 10, 15, 16, 16, 19, 19, 20, 15, 16, 16, 19, 19, 20, 15, 16, 16, 19, 19, 20, 15, 16, 16, 19, 19, 20, 21, 22, 22, 23, 23, 20, 24, 22, 22, 23, 23, 20, 28, 29, 29, 32, 32, 33, 24, 22, 22, 23, 23, 20, 24, 22, 22, 23, 23, 20, 34, 35, 35, 36, 36, 20, 37, 35, 35, 36, 36, 20, 38, 39, 39, 40, 40, 33, 37, 35, 35, 36, 36, 20, 37, 35, 35, 36, 36, 20, 41, 42, 42, 43, 43, 20, 44, 42, 42, 43, 43, 20, 45, 46, 46, 47, 47, 33, 44, 42, 42, 43, 43, 20, 44, 42, 42, 43, 43, 20, 48, 49, 51, 53, 61, 62, 67, 68, 68, 74, 75, 84, 85, 90, 91, 91, 96, 97, 102, 103, 103, 84, 85, 90, 91, 91, 96, 97, 102, 103, 103, 112, 113, 118, 119, 119, 124, 125, 130, 131, 131, 138, 139, 142, 143, 143, 112, 144, 118, 119, 119, 124, 125, 130, 131, 131, 153, 154, 159, 160, 160, 165, 166, 171, 172, 172, 179, 180, 183, 184, 184, 153, 185, 159, 160, 160, 165, 166, 171, 172, 172, 194, 195, 200, 201, 201, 206, 207, 212, 213, 213, 220, 221, 224, 225, 225, 194, 226, 200, 201, 201, 206, 207, 212, 213, 213, 231, 235, 236, 237, 242, 243, 243, 248, 249, 249, 250, 251, 252, 253, 254, 254, 254, 255, 255, 254, 256, 257, 258, 254, 254, 255, 255, 254, 256, 257, 258, 254, 254, 254, 255, 255, 259, 260, 261, 254, 255, 255, 254, 256, 257, 258, 254, 254, 255, 255, 259, 262, 262, 259, 259, 259, 263, 263, 259, 264, 265, 266, 259, 259, 263, 263, 259, 264, 265, 266, 259, 259, 259, 263, 263, 267, 268, 259, 263, 263, 259, 264, 265, 266, 259, 259, 263, 263, 267, 269, 269, 267, 267, 267, 270, 270, 267, 271, 272, 273, 267, 267, 270, 270, 267, 271, 272, 273, 267, 267, 267, 270, 270, 274, 275, 267, 270, 270, 267, 271, 272, 273, 267, 267, 270, 270, 274, 276, 277, 274, 274, 274, 278, 278, 274, 279, 280, 281, 274, 274, 278, 278, 274, 279, 280, 281, 274, 274, 274, 278, 278, 274, 279, 280, 281, 274, 274, 278, 278, 274, 279, 280, 281, 274, 282, 282, 282, 278, 278, 283, 290, 291, 291, 292, 291, 291, 292, 291, 291, 292, 291, 291, 292, 291, 291, 293, 294, 294, 295, 294, 294, 296, 294, 294, 295, 294, 294, 295, 294, 294, 297, 298, 298, 299, 298, 298, 300, 298, 298, 299, 298, 298, 299, 298, 298, 301, 302, 302, 303, 302, 302, 304, 302, 302, 303, 302, 302, 303, 302, 302, 305, 306], "elements_category": null, "suffix_table": [[0, null], [1, 0], [2, 1], [3, 2], [4, 3], [5, 4], [6, 4], [7, 2], [4, 7], [6, 8], [8, 8], [2, 2], [2, 11], [3, 12], [4, 13], [9, 14], [6, 14], [7, 12], [4, 17], [6, 18], [8, 18], [10, 14], [11, 14], [11, 18], [12, 14], [2, 12], [3, 25], [4, 26], [13, 27], [11, 27], [7, 25], [4, 30], [11, 31], [8, 31], [14, 14], [15, 14], [15, 18], [16, 14], [17, 27], [15, 27], [15, 31], [18, 14], [19, 14], [19, 18], [20, 14], [21, 27], [19, 27], [19, 31], [22, 4], [23, 4], [24, null], [25, 50], [26, null], [27, 52], [28, null], [29, 54], [30, 55], [31, 56], [29, 57], [32, 58], [33, 59], [34, 60], [35, 60], [36, 56], [29, 63], [37, 64], [38, 65], [34, 66], [6, 66], [39, 56], [29, 69], [40, 70], [41, 71], [42, 72], [43, 73], [44, 73], [45, 56], [29, 76], [46, 77], [29, 78], [47, 79], [29, 80], [32, 81], [33, 82], [43, 83], [48, 83], [49, 79], [29, 86], [37, 87], [38, 88], [43, 89], [6, 89], [50, 79], [29, 92], [32, 93], [33, 94], [43, 95], [48, 95], [51, 79], [29, 98], [37, 99], [38, 100], [43, 101], [6, 101], [52, 56], [29, 104], [46, 105], [29, 106], [47, 107], [29, 108], [32, 109], [33, 110], [53, 111], [54, 111], [49, 107], [29, 114], [37, 115], [38, 116], [53, 117], [11, 117], [50, 107], [29, 120], [32, 121], [33, 122], [53, 123], [55, 123], [51, 107], [29, 126], [37, 127], [38, 128], [53, 129], [11, 129], [56, 107], [29, 132], [46, 133], [29, 134], [32, 135], [33, 136], [53, 137], [57, 137], [37, 135], [38, 140], [53, 141], [11, 141], [55, 111], [58, 56], [29, 145], [46, 146], [29, 147], [47, 148], [29, 149], [32, 150], [33, 151], [59, 152], [14, 152], [49, 148], [29, 155], [37, 156], [38, 157], [59, 158], [15, 158], [50, 148], [29, 161], [32, 162], [33, 163], [59, 164], [60, 164], [51, 148], [29, 167], [37, 168], [38, 169], [59, 170], [15, 170], [56, 148], [29, 173], [46, 174], [29, 175], [32, 176], [33, 177], [59, 178], [61, 178], [37, 176], [38, 181], [59, 182], [15, 182], [60, 152], [62, 56], [29, 186], [46, 187], [29, 188], [47, 189], [29, 190], [32, 191], [33, 192], [63, 193], [18, 193], [49, 189], [29, 196], [37, 197], [38, 198], [63, 199], [19, 199], [50, 189], [29, 202], [32, 203], [33, 204], [63, 205], [64, 205], [51, 189], [29, 208], [37, 209], [38, 210], [63, 211], [19, 211], [56, 189], [29, 214], [46, 215], [29, 216], [32, 217], [33, 218], [63, 219], [65, 219], [37, 217], [38, 222], [63, 223], [19, 223], [64, 193], [66, 56], [29, 227], [67, 228], [68, 229], [69, 230], [70, 56], [29, 232], [71, 233], [72, 234], [73, 234], [74, 234], [75, null], [29, 238], [76, 239], [77, 240], [72, 241], [78, 241], [79, null], [80, 244], [81, 245], [82, 246], [78, 247], [72, null], [69, null], [74, null], [22, null], [23, null], [63, null], [19, null], [64, null], [20, null], [83, null], [59, null], [21, null], [84, null], [18, null], [15, null], [60, null], [16, null], [85, null], [53, null], [17, null], [14, null], [11, null], [55, null], [12, null], [86, null], [43, null], [13, null], [10, null], [87, null], [6, null], [88, null], [9, null], [89, null], [34, null], [5, null], [90, null], [91, 284], [92, 285], [93, 286], [94, 287], [95, 288], [5, 289], [6, 289], [9, 289], [10, 289], [11, 289], [12, 289], [13, 289], [14, 289], [15, 289], [16, 289], [17, 289], [18, 289], [19, 289], [20, 289], [21, 289], [22, 289], [23, 289]], "string_table": ["/raid/zdevito/pytorch/stuff.py:10:<module>", "/raid/zdevito/pytorch/torch/nn/modules/module.py:890:cuda", "/raid/zdevito/pytorch/torch/nn/modules/module.py:782:_apply", "/raid/zdevito/pytorch/torch/nn/modules/module.py:805:_apply", "/raid/zdevito/pytorch/torch/nn/modules/module.py:890:<lambda>", "36.8KiB allocation", "256.0B allocation", "/raid/zdevito/pytorch/torch/nn/modules/module.py:829:_apply", "8.0B allocation", "144.0KiB allocation", "288.0KiB allocation", "512.0B allocation", "576.0KiB allocation", "32.0KiB allocation", "1.1MiB allocation", "1.0KiB allocation", "2.2MiB allocation", "128.0KiB allocation", "4.5MiB allocation", "2.0KiB allocation", "9.0MiB allocation", "512.0KiB allocation", "2.0MiB allocation", "3.9KiB allocation", "/raid/zdevito/pytorch/stuff.py:14:<module>", "4.6MiB allocation", "/raid/zdevito/pytorch/stuff.py:15:<module>", "64.0B allocation", "/raid/zdevito/pytorch/stuff.py:19:<module>", "/raid/zdevito/pytorch/torch/nn/modules/module.py:1480:_call_impl", "/raid/zdevito/vision/torchvision/models/resnet.py:285:forward", "/raid/zdevito/vision/torchvision/models/resnet.py:268:_forward_impl", "/raid/zdevito/pytorch/torch/nn/modules/conv.py:463:forward", "/raid/zdevito/pytorch/torch/nn/modules/conv.py:459:_conv_forward", "24.5MiB allocation", "111.4KiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:269:_forward_impl", "/raid/zdevito/pytorch/torch/nn/modules/batchnorm.py:171:forward", "/raid/zdevito/pytorch/torch/nn/functional.py:2450:batch_norm", "/raid/zdevito/vision/torchvision/models/resnet.py:271:_forward_impl", "/raid/zdevito/pytorch/torch/nn/modules/pooling.py:166:forward", "/raid/zdevito/pytorch/torch/_jit_internal.py:485:fn", "/raid/zdevito/pytorch/torch/nn/functional.py:782:_max_pool2d", "6.1MiB allocation", "12.2MiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:273:_forward_impl", "/raid/zdevito/pytorch/torch/nn/modules/container.py:204:forward", "/raid/zdevito/vision/torchvision/models/resnet.py:92:forward", "401.2KiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:93:forward", "/raid/zdevito/vision/torchvision/models/resnet.py:96:forward", "/raid/zdevito/vision/torchvision/models/resnet.py:97:forward", "/raid/zdevito/vision/torchvision/models/resnet.py:274:_forward_impl", "3.1MiB allocation", "293.6KiB allocation", "1.6MiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:100:forward", "37.6KiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:275:_forward_impl", "1.5MiB allocation", "6.3MiB allocation", "130.2KiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:276:_forward_impl", "784.0KiB allocation", "25.0MiB allocation", "514.4KiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:278:_forward_impl", "/raid/zdevito/pytorch/torch/nn/modules/pooling.py:1184:forward", "/raid/zdevito/pytorch/torch/nn/functional.py:1214:adaptive_avg_pool2d", "16.0KiB allocation", "/raid/zdevito/vision/torchvision/models/resnet.py:280:_forward_impl", "/raid/zdevito/pytorch/torch/nn/modules/linear.py:114:forward", "31.2KiB allocation", "1.0MiB allocation", "4.0MiB allocation", "/raid/zdevito/pytorch/stuff.py:20:<module>", "/raid/zdevito/pytorch/torch/nn/modules/loss.py:1174:forward", "/raid/zdevito/pytorch/torch/nn/functional.py:3028:cross_entropy", "4.0B allocation", "/raid/zdevito/pytorch/stuff.py:21:<module>", "/raid/zdevito/pytorch/torch/_tensor.py:484:backward", "/raid/zdevito/pytorch/torch/autograd/__init__.py:190:backward", "/raid/zdevito/pytorch/torch/autograd/__init__.py:86:_make_grads", "40.5MiB allocation", "514.3KiB allocation", "18.0MiB allocation", "16.0MiB allocation", "292.5KiB allocation", "400.2KiB allocation", "28.1MiB allocation", "/raid/zdevito/pytorch/stuff.py:22:<module>", "/raid/zdevito/pytorch/torch/optim/optimizer.py:198:wrapper", "/raid/zdevito/pytorch/torch/optim/optimizer.py:29:_use_grad", "/raid/zdevito/pytorch/torch/optim/sgd.py:151:step", "/raid/zdevito/pytorch/torch/optim/sgd.py:202:sgd", "/raid/zdevito/pytorch/torch/optim/sgd.py:235:_single_tensor_sgd"], "initially_allocated": [], "categories": null}
+
+function process_alloc_data(fraction_of_memory_reported=1) {
+    let current = []
+    let current_data = []
+    let data = []
+    let max_size = 0
+
+    let total_mem = 0
+    let timestep = 0
+
+    let max_at_time = []
+    function advance(n, max) {
+        timestep += n
+        for (let i = 0; i < n; i++) {
+            max_at_time.push(max)
+        }
+    }
+
+    let mini_points = []
+
+    let sizes = alloc_data.elements_size.map(x => x).sort((x, y) => y - x)
+    let total_size = sizes.reduce((x, y) => x + y)
+    const memory_threshold = fraction_of_memory_reported * total_size
+    let total_seen = 0
+    let memory_threshold_size = 0
+
+    for (const [i, size] of sizes.entries()) {
+        total_seen += size
+        if (total_seen > memory_threshold) {
+            memory_threshold_size = size
+            break
+        }
+    }
+
+    function add_allocation(elem) {
+        let size = alloc_data.elements_size[elem]
+        current.push(elem)
+        let color = elem
+        if (alloc_data.elements_category !== null) {
+            color = alloc_data.elements_category[elem]
+        }
+        let e = {elem: elem, timesteps: [timestep], offsets: [total_mem], size: size, color: color}
+        current_data.push(e)
+        data.push(e)
+        total_mem += size
+    }
+
+    for (const elem of alloc_data.initially_allocated) {
+        add_allocation(elem)
+    }
+
+    for (const action of alloc_data.actions) {
+        const elem = action
+        const idx = current.findIndex(x => x === elem)
+        const size = alloc_data.elements_size[elem]
+        if (size < memory_threshold_size) {
+            continue
+        }
+        // first time we see an action we add it
+        // second time we remove it
+        if (idx == -1) {
+            add_allocation(elem)
+            advance(1, total_mem)
+        } else {
+            advance(1, total_mem)
+            const removed = current_data[idx]
+            removed.timesteps.push(timestep)
+            removed.offsets.push(removed.offsets.at(-1))
+            current.splice(idx, 1)
+            current_data.splice(idx, 1)
+
+            if (idx < current.length) {
+                for (let j = idx; j < current.length; j++) {
+                    const e = current_data[j]
+                    e.timesteps.push(timestep)
+                    e.offsets.push(e.offsets.at(-1))
+                    e.timesteps.push(timestep + 3)
+                    e.offsets.push(e.offsets.at(-1) - size)
+                }
+                advance(3, total_mem)
+            }
+            total_mem -= size
+        }
+        max_size = Math.max(total_mem, max_size)
+    }
+
+    for (const elem of current_data) {
+        elem.timesteps.push(timestep)
+        elem.offsets.push(elem.offsets.at(-1))
+    }
+    return {
+        max_size: max_size,
+        allocations_over_time: data,
+        max_at_time: max_at_time,
+        context_for_id:  (elem) => {
+            let strings = []
+            let id = alloc_data.elements_info[elem]
+            while (id !== null) {
+                const [sid, next_id] = alloc_data.suffix_table[id]
+                strings.push(alloc_data.string_table[sid])
+                id = next_id
+            }
+            return `${strings.join('\n')}\n`
+        }
+    }
+}
+
+function MemoryPlot(svg, data, left_pad, colors=schemeTableau10) {
+    function format_points(d) {
+        const size = d.size
+        const xs = d.timesteps.map(t => xscale(t))
+        const bottom = d.offsets.map(t => yscale(t))
+        const top = d.offsets.map(t => yscale(t + size))
+
+        const p0 = xs.map((x, i) => `${x},${bottom[i]}`)
+        const p1 = xs.map((x, i) => `${x},${top[i]}`).reverse()
+
+        return `${p0.join(' ')} ${p1.join(' ')}`
+    }
+
+    let max_timestep = data.max_at_time.length
+    let max_size = data.max_size
+
+    let width = svg.attr('width')
+    let height = svg.attr('height')
+    let plot_width = width - left_pad
+    let plot_height = height
+
+    let yscale = scaleLinear().domain([0, max_size]).range([plot_height, 0]);
+    let heightscale = scaleLinear().domain([0, max_size]).range([0, plot_height]);
+    let yaxis = axisLeft(yscale).tickFormat(d3.format("~s"))
+    let xscale = scaleLinear().domain([0, max_timestep]).range([0, plot_width])
+    let plot_coordinate_space = svg.append("g").attr("transform", `translate(${left_pad}, ${0})`)
+    let plot_outer = plot_coordinate_space.append('g')
+
+    function view_rect(a) {
+        return a.append('rect').attr('x', 0).attr('y', 0)
+                .attr('width', plot_width).attr('height', plot_height)
+                .attr('fill', 'white')
+    }
+
+    view_rect(plot_outer)
+
+    let cp = svg.append("clipPath").attr("id", "clip")
+    view_rect(cp)
+    plot_outer.attr('clip-path', "url(#clip)")
+
+
+    let zoom_group = plot_outer.append("g")
+    let scrub_group = zoom_group.append('g')
+
+    let plot = scrub_group.selectAll("polygon")
+    .data(data.allocations_over_time)
+    .enter()
+    .append("polygon")
+    .attr('points', format_points)
+    .attr('fill', d => colors[d.color % colors.length])
+
+    let axis = plot_coordinate_space.append('g').call(yaxis)
+
+
+    let scale_mini = 0
+    let translate_mini = 0
+    function handleZoom(e) {
+        const t = e.transform
+        zoom_group.attr("transform", t)
+        axis.call(yaxis.scale(e.transform.rescaleY(yscale)))
+    }
+
+    const thezoom = zoom().on('zoom', handleZoom)
+    plot_outer.call(thezoom)
+
+    return {
+        select_window: (stepbegin, stepend, max) => {
+            let begin = xscale(stepbegin)
+            let size = xscale(stepend) - xscale(stepbegin);
+            let scale = plot_width / size
+            let translate = -begin
+            let yscale =  max_size/max
+            scrub_group.attr("transform", `scale(${scale/yscale}, 1) translate(${translate}, 0)`)
+            plot_outer.call(thezoom.transform, zoomIdentity.scale(yscale).translate(0, -(plot_height - plot_height/yscale)))
+        },
+        set_delegate: (delegate) => {
+            plot.on('mouseover', function (e, d) { delegate.set_selected(d3.select(this)) } )
+            .on('mousedown', function(e, d) { delegate.default_selected = d3.select(this)})
+            .on('mouseleave', function (e, d) { delegate.set_selected(delegate.default_selected) } )
+        }
+    }
+}
+
+function ContextViewer(text, data) {
+    let current_selected = null
+
+    return {
+        default_selected: null,
+        set_selected: (d) => {
+            if (current_selected !== null) {
+                current_selected.attr('stroke', null).attr('stroke-width', null);
+            }
+            if (d === null) {
+                text.text("")
+            } else {
+                const dd = d.datum()
+                text.text(`${dd.elem} ${data.context_for_id(dd.elem)}`)
+                d.attr('stroke', 'black').attr('stroke-width', 1).attr('vector-effect', 'non-scaling-stroke')
+            }
+            current_selected = d
+        }
+    }
+}
+
+
+function MiniMap(mini_svg, plot, data, left_pad, height=70) {
+    let max_at_time = data.max_at_time
+    let width = mini_svg.attr('width')
+    let plot_width = width - left_pad
+    let yscale = scaleLinear().domain([0, data.max_size]).range([height, 0]);
+    let minixscale = scaleLinear().domain([0, max_at_time.length]).range([left_pad, width])
+
+    let mini_points = [[max_at_time.length, 0], [0, 0]]
+
+    for (const [i, m] of max_at_time.entries()) {
+        let [lastx, lasty] = mini_points[mini_points.length - 1]
+        if (m !== lasty) {
+            mini_points.push([i, lasty])
+            mini_points.push([i, m])
+        } else if (i === max_at_time.length - 1) {
+            mini_points.push([i, m])
+        }
+    }
+
+
+    let points = mini_points.map(([t, o]) => `${minixscale(t)}, ${yscale(o)}`)
+    points = points.join(' ')
+    mini_svg.append('polygon').attr('points', points).attr('fill', schemeTableau10[0])
+
+    let xscale = scaleLinear().domain([0, max_at_time.length]).range([0, plot_width])
+
+
+    const brush = brushX()
+    brush.extent([[left_pad, 0], [width, height]])
+    brush.on('brush', function({selection}) {
+        let [begin, end] = selection.map(x => x - left_pad)
+
+        let stepbegin = Math.floor(xscale.invert(begin))
+        let stepend = Math.floor(xscale.invert(end))
+        let max = 0
+        for (let i = stepbegin; i < stepend; i++) {
+            max = Math.max(max, max_at_time[i])
+        }
+        plot.select_window(stepbegin, stepend, max)
+    })
+    mini_svg.call(brush)
+    return {}
+}
+
+function Legend(svg, categories) {
+    let xstart = width - 100
+    let ystart = 30
+    plot_svg.append('g').selectAll('rect')
+    .data(categories)
+    .enter()
+    .append('rect')
+    .attr('x', (c, i) => xstart)
+    .attr('y', (c, i) => ystart + i*15)
+    .attr('width', 10)
+    .attr('height', 10)
+    .attr('fill', (c, i) => schemeTableau10[i % schemeTableau10.length])
+    plot_svg.append('g').selectAll('text')
+    .data(categories)
+    .enter()
+    .append('text')
+    .attr('x', (c, i) => xstart + 20)
+    .attr('y', (c, i) => ystart + i*15 + 8)
+    .attr("font-family", "helvetica")
+    .attr('font-size', 10)
+    .text((c) => c)
+    return {}
+}
+
+let left_pad = 70
+let width = 1024
+let height = 768
+let data = process_alloc_data()
+let body = d3.select("body")
+
+let plot_svg = body.append("svg").attr('width', width).attr('height', height).attr('display', 'block')
+let plot = MemoryPlot(plot_svg, data, left_pad)
+
+if (alloc_data.categories !== null) {
+    Legend(plot_svg.append('g'), alloc_data.categories)
+}
+
+MiniMap(body.append("svg").attr('width', width).attr('height', 80).attr('display', 'block'), plot, data, left_pad)
+let delegate = ContextViewer(body.append("div").append("pre").text('none'), data)
+plot.set_delegate(delegate)
+
+</script>
+</body>
+</html>
