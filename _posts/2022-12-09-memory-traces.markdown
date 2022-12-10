@@ -7,9 +7,12 @@ categories: ""
 
 Vizualizing PyTorch memory usage over time
 ==========================================
-As described in a [previous post](https://zdevito.github.io/2022/08/16/memory-snapshots.html), _memory snapshots_ are a way to dump and visualize all the state about how CUDA memory in PyTorch is allocated. This information is especially useful when trying to debug why a program is running out of memory (an OOM) because it lets you see the stack traces for all allocated memory, and how it fits in to the memory caches that our [caching allocator](https://zdevito.github.io/2022/08/04/cuda-caching-allocator.html) uses.
 
-However, sometimes it is useful to see the series of allocation _events_ that led up to running out of memory in addition to the state of memory when the program crashed. _Memory traces_ provide this facility by supplementing the snapshot information with trace events related to memory.
+![trace3](/assets/trace4.png)
+
+[Memory snapshots](https://zdevito.github.io/2022/08/16/memory-snapshots.html) are a way to dump and visualize the state of CUDA memory allocation in PyTorch. They are useful for debugging out of memory (OOM) errors by showing stack traces for allocated memory and how the allocated memory fits in the caches used by the [caching allocator](https://zdevito.github.io/2022/08/04/cuda-caching-allocator.html).
+
+Memory _traces_ supplement snapshot information with trace events related to memory allocation. They show the series of allocation events that led up to an OOM error and can be used to generate visualizations of memory usage over time.
 
 Generating Memory Snapshots with Traces
 ---------------------------------------
@@ -23,7 +26,9 @@ Like snapshots, we have to enable memory recording:
             # record stack information for the trace events
             trace_alloc_record_context=True)
 
-To limit the total size of the trace event buffer, we limit it to the last `trace_alloc_max_entries` before a snapshot is taken, but the facility can easily record hundreds of thousands of events. Recording these traces is pretty fast (~1us per allocation, a normal PyTorch kernel call takes at least 8 us), and adds almost no extra time if the program was already recording for memory snapshots.  Taking a snapshot is like before:
+We limit the total size of the trace event buffer to `trace_alloc_max_entries` before a snapshot is taken, but the facility can easily record hundreds of thousands of events. Recording these traces is pretty fast (~1us per allocation, a normal PyTorch kernel call takes at least 8 us), and adds almost no extra time on top of recording memory snapshots.
+
+As an example, we can take a snapshot of a training iteration for a resnet:
 
     from torchvision.models import resnet18
     from pprint import pprint
@@ -118,10 +123,10 @@ Since the traces are just part of the snapshot, they can be pickled in the same 
     with open('snapshot.pickle', 'wb') as f:
         dump(snapshot, f)
 
-The file [_memory_viz.py](https://github.com/pytorch/pytorch/blob/master/torch/cuda/_memory_viz.py) can be downloaded and run independently of pytorch to view the traces textually:
+The file [_memory_viz.py](https://github.com/pytorch/pytorch/blob/master/torch/cuda/_memory_viz.py) can be downloaded and run independently of pytorch to view the traces textually, using the `trace` command:
 
     $ wget https://raw.githubusercontent.com/pytorch/pytorch/master/torch/cuda/_memory_viz.py
-    $ python _memory_viz.py stats snapshot.pickle
+    $ python _memory_viz.py trace snapshot.pickle
     Device 0 ----------------
     291 entries
     a = cudaMalloc(139838718214144, 2.0MiB)
@@ -135,19 +140,19 @@ The file [_memory_viz.py](https://github.com/pytorch/pytorch/blob/master/torch/c
 
 Visualizing traces
 ------------------
-The `_memory_viz.py` can generate interactive html plots that let you explore the allocated memory as it existed over time:
+Visualization of this information can make it much easier to interpret. The same tool can generate interactive html plots that let you explore the allocated memory as it existed over time:
 
     $ python _memory_viz.py trace_plot snapshot.pickle -o trace.html
 
-The visualization plots the total amount of memory allocated on the Y axis, with memory events over time on the X axis. [Click for an interactive view](/assets/trace.html):
+The visualization plots the total amount of memory allocated on the Y axis, with memory events over time on the X axis. [Interactive view here](/assets/trace.html):
 
 ![trace](/assets/trace.png)
 
 Brushing over individual allocations provides the stack trace where they were allocated.
 
-Looking at the visualization makes it easy to see patterns in memory usage during training. The forward pass is clear as the memory for activtions accumulates waiting for its use in the backward pass. Then as the backward pass starts, those saved activations start to be freed step-by-step as gradient tensors get allocated. The leads to the common pattern where max memory usage occurs somewhere early in the backward pass. Then at the end, the optimizer step, which allocates its own temporaries is visible.
+The visualization makes patterns in memory clear. The forward pass accumulates activations waiting for their use in the backward pass. As the backward pass starts, those saved activations start to be freed step-by-step as gradient tensors are allocated. The leads to the common pattern where max memory usage occurs somewhere early in the backward pass. Th optimizer step, which allocates its own temporaries, is visible at the end.
 
-Another interesting pattern is the spikes in usage that occur both in forward and backward. Looking at the forward pass ones with stack information reveals they are part of the `_conv_forward` operator and are likely the temporary buffers allocated to perform the fastest convolution type in cudnn. One common pattern to see when near maximum memory usage is for cudnn to run out of memory and try a different algorithm and succeed. This visualization makes it clear this happens because these spikes will hit the memory max first.
+Another interesting pattern is the spikes in usage. Looking at the forward pass with stack information reveals they are part of the `_conv_forward` operator and are likely the temporary buffers allocated to perform the fastest convolution type in CUDNN. One common pattern to see when near maximum memory usage is for CUDNN to run out of memory, try a different algorithm, and then succeed. This visualization makes it clear this happens because these spikes hit the memory max first.
 
 
 The chart also allows panning and zooming using the minimap or dragging the chart around, where we can zoom into one of these spikes in memory usage in the backward pass:
@@ -157,7 +162,7 @@ The chart also allows panning and zooming using the minimap or dragging the char
 
 Generating Traces when Out of Memory
 ---------------------------------------
-With memory tracing turned on, it can be helpful to generate a snapshot and a trace righ tat the point of running out of memory by registering an observer with the allocator that will be called everytime it is about to raise an OutOfMemoryError:
+With memory tracing turned on, it can be helpful to generate a snapshot and a trace right at the point of running out of memory by registering an observer with the allocator that will be called everytime it is about to raise an OutOfMemoryError:
 
     def oom_observer(device, alloc, device_alloc, device_free):
         # snapshot right after an OOM happened
@@ -167,4 +172,25 @@ With memory tracing turned on, it can be helpful to generate a snapshot and a tr
 
     torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
-When running out of memory, this function may be called multiple times because as we saw with the spikes earlier convolution might run out of memory and retry with an algorithm that uses less scratch space.
+When running out of memory, this function may be called multiple times because as we saw with the spikes earlier convolution might run out of memory and retry with an algorithm that uses less scratch space. The last time the observer is called will hold the information from an uncaught OOM error.
+
+Generating Memory Visualization from torch.profiler traces
+----------------------------------------------------------
+`torch.profiler` can also record memory usage along with additional helpful information such as the location in the module hierarchy, the category of tensor being allocated, the tensor sizes, and the set of operators used to generate the tensor. Our `_memory_viz.py` tools can also parse and create interactive visualization for this information as well:
+
+        with torch.profiler.profile(
+            with_stack=True,
+            profile_memory=True,
+            record_shapes=True
+        ) as prof:
+            <your code here>
+
+        from torch.cuda._memory_viz import profile_plot
+        with open('output.html', 'w') as f:
+            f.write(profile_plot(prof))
+
+This provides category and module information as well as stack traces:
+
+![trace3](/assets/trace3.png)
+
+Depending on circumstances, it may be easier to use profiling or memory snapshots to generate memory plots and debug usage. Memory snapshots can be generated and then plotted offline, but the profiler provides additional information such as categories that can be helpful.
