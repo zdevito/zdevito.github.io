@@ -1,12 +1,9 @@
 ---
 layout: post
-title:  "Vizualizing PyTorch memory usage over time"
+title:  "Visualizing PyTorch memory usage over time"
 date:   2022-12-08 21:55:37 -0700
 categories: ""
 ---
-
-Vizualizing PyTorch memory usage over time
-==========================================
 
 ![trace3](/assets/trace4.png)
 
