@@ -5,7 +5,8 @@ date:   2022-12-08 21:55:37 -0700
 categories: ""
 ---
 
-![trace3](/assets/trace4.png)
+[![trace3](/assets/trace.png)](/assets/trace.html)
+
 
 [Memory snapshots](https://zdevito.github.io/2022/08/16/memory-snapshots.html) are a way to dump and visualize the state of CUDA memory allocation in PyTorch. They are useful for debugging out of memory (OOM) errors by showing stack traces for allocated memory and how the allocated memory fits in the caches used by the [caching allocator](https://zdevito.github.io/2022/08/04/cuda-caching-allocator.html).
 
@@ -143,7 +144,7 @@ Visualization of this information can make it much easier to interpret. The same
 
 The visualization plots the total amount of memory allocated on the Y axis, with memory events over time on the X axis. [Interactive view here](/assets/trace.html):
 
-![trace](/assets/trace.png)
+[![trace](/assets/trace.png)](/assets/trace.html)
 
 Brushing over individual allocations provides the stack trace where they were allocated.
 
