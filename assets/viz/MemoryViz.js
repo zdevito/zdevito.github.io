@@ -1538,7 +1538,7 @@ body.on('drop', () => {
 
 selection_to_div[''] = body
   .append('div')
-  .text('Drop and drop a file to load a local snapshot. No data from the snapshot is uploaded.');
+  .text('Drag and drop a file to load a local snapshot. No data from the snapshot is uploaded.');
 
 let next_unique_n = 1;
 function add_snapshot(name, loader) {
