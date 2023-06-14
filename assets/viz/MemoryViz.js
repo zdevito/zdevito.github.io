@@ -1,10 +1,3 @@
-/**
- * (c) Meta Platforms, Inc. and affiliates. Confidential and proprietary.
- *
- * @format
- * @oncall torchdim
- */
-
 'use strict';
 
 import * as d3 from "https://cdn.skypack.dev/d3@5";
@@ -1438,6 +1431,32 @@ function unpickle(buffer) {
   }
 }
 
+function decode_base64(input) {
+  function decode_char(i, shift) {
+    const nChr = input.charCodeAt(i)
+    const r = nChr > 64 && nChr < 91
+      ? nChr - 65
+      : nChr > 96 && nChr < 123
+      ? nChr - 71
+      : nChr > 47 && nChr < 58
+      ? nChr + 4
+      : nChr === 43
+      ? 62
+      : nChr === 47
+      ? 63
+      : 0;
+    return r << shift
+  }
+  let output = new Uint8Array(input.length / 4 * 3)
+  for (let i = 0, j = 0; i < input.length; i += 4, j += 3) {
+  	let u24 = decode_char(i, 18) + decode_char(i + 1, 12) + decode_char(i + 2, 6) + decode_char(i + 3)
+    output[j] = u24 >> 16
+    output[j+1] = (u24 >> 8) & 0xFF
+    output[j+2] = u24 & 0xFF;
+  }
+  return output.buffer
+}
+
 const kinds = {
   'Active Memory Timeline': create_trace_view,
   'Allocator State History': create_segment_view,
@@ -1561,6 +1580,18 @@ export function add_remote_files(files) {
       fetch(f.url)
         .then(x => x.arrayBuffer())
         .then(data => finished_loading(unique_name, data));
+    }),
+  );
+  if (files.length > 0) {
+    selected_change();
+  }
+}
+
+export function add_local_files(files, view_value) {
+  view.node().value = view_value
+  files.forEach(f =>
+    add_snapshot(f.name, (unique_name) => {
+      finished_loading(unique_name, decode_base64(f.base64))
     }),
   );
   if (files.length > 0) {
