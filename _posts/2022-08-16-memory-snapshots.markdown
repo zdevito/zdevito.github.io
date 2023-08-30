@@ -17,7 +17,7 @@ Generating snapshots
 First, we have to enable the recording of stack frame information for each allocation:
 
     import torch
-    torch.cuda.memory._record_memory_history(True)
+    torch.cuda.memory._record_memory_history()
 
 Recording these stack traces is pretty fast (~1us per allocation, a normal PyTorch kernel call takes at least 8 us), but we leave it off by default.  Once enabled we can allocate some memory, and take a snapshot:
 
